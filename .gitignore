@@ -1,0 +1,16 @@
+.venv/
+.venv-text/
+.venv-speakers/
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+.DS_Store
+inbox/*
+!inbox/.gitkeep
+output/
+转写TXT/
+state/
+models/
+verification/
+config.local.toml

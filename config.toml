@@ -1,0 +1,66 @@
+# 所有相对路径均相对于此配置文件所在目录。
+[paths]
+inbox = "inbox"
+output = "output"
+state = "state"
+models = "models"
+
+[voice_memos]
+enabled = true
+# Apple 管理 iCloud 同步；项目只读扫描本地副本，不读取其他 iCloud 文件。
+directories = [
+  "~/Library/Group Containers/group.com.apple.VoiceMemos.shared/Recordings",
+  "~/Library/Application Support/com.apple.voicememos/Recordings",
+  "~/Library/Containers/com.apple.VoiceMemos/Data/Library/Application Support/Recordings",
+]
+
+[whisper]
+# 保留 whisper 配置段名称以兼容旧入口；默认引擎为 MLX Qwen3-ASR。
+# 完整精度（不做 4/8 位量化），Apple Silicon GPU 本地运行。
+model = "qwen3-asr-1.7b"
+language = "zh" # 中文及中英混合；简体阅读文档由本地 OpenCC 转换，原始识别结果保留。
+compute_type = "float16"
+# cpu_threads / beam_size / condition_on_previous_text 仅用于可选的旧 Whisper 引擎。
+cpu_threads = 4
+beam_size = 5
+word_timestamps = true
+vad_filter = true
+condition_on_previous_text = false
+initial_prompt = "" # 可填专有名词，但不要填推测的会议内容。
+
+[processing]
+recursive = true
+extensions = ["m4a", "qta", "mp3", "wav", "mov", "mp4", "aac", "aiff", "aif", "caf", "flac"]
+settle_seconds = 30 # 最后修改后等待，避免读取正在同步的文件。
+poll_seconds = 10 # 手动扫描等待同步文件时、以及可选的 watch 模式的检查间隔。
+retry_seconds = 300 # 仅 watch 模式的失败重试间隔；手动扫描每次都重试失败任务。
+timeout_seconds = 0 # 0 不限时；可设置单文件超时秒数。
+
+[notifications]
+enabled = true # macOS 系统通知：开始转写、完成、失败；false 关闭。
+
+[markdown]
+paragraph_gap_seconds = 2.0
+paragraph_max_chars = 400
+section_seconds = 300 # 仅用时间作为章节标题，不推测主题。
+
+[analysis]
+# Qwen3.5-9B 4bit，独立 MLX 环境；与语音识别串行使用本机模型资源。
+enabled = true
+chunk_chars = 4000
+max_input_tokens = 16000
+max_output_tokens = 6000
+timeout_seconds = 3600
+retry_seconds = 600
+max_jobs_per_scan = 1 # 仅 watch 模式每轮的上限；手动扫描会处理全部新录音。
+
+[speakers]
+# 原音频不上传；模型首次下载需接受官方访问条款。
+# 权重尚未准备好时原始转写照常完成，索引显示模型待准备。
+enabled = true
+device = "auto" # Apple GPU 可用时优先使用；与其余模型串行运行。
+num_speakers = 0 # 0 自动判断；已知人数时可填具体数字。
+cpu_threads = 4
+timeout_seconds = 7200
+retry_seconds = 600
+max_jobs_per_scan = 1 # 仅 watch 模式每轮的上限；手动扫描会处理全部新录音。

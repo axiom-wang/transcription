@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="color-scheme" content="light"><title>听记 · 本地录音工作台</title>
+<link rel="stylesheet" href="/style.css"><script src="/app.js" defer></script>
+</head>
+<body>
+<a class="skip-link" href="#main">跳到主要内容</a>
+<aside class="sidebar">
+  <a class="brand" href="#library" aria-label="听记首页"><span class="brand-symbol"><i></i><i></i><i></i><i></i></span><span>听记<small>本地录音工作台</small></span></a>
+  <button class="primary import-button" data-action="import"><span>＋</span> 导入录音 <kbd>⌘ O</kbd></button>
+  <span class="nav-caption">工作空间</span>
+  <nav aria-label="主导航">
+    <button data-view="library" class="nav-item active"><span data-icon="library"></span>资料库 <b id="nav-library">0</b></button>
+    <button data-view="favorites" class="nav-item"><span data-icon="star"></span>我的收藏</button>
+    <button data-view="queue" class="nav-item"><span data-icon="queue"></span>处理队列 <b id="nav-queue">0</b></button>
+    <button data-view="attention" class="nav-item"><span data-icon="alert"></span>需要处理 <b id="nav-attention">0</b></button>
+    <button data-view="archive" class="nav-item"><span data-icon="archive"></span>已归档</button>
+  </nav>
+  <div class="sidebar-bottom">
+    <button data-view="settings" class="nav-item"><span data-icon="settings"></span>设置与运行环境</button>
+    <div class="local-note"><span class="status-dot"></span><span>所有处理留在本机<small>音频与文字不上传云端</small></span></div>
+  </div>
+</aside>
+<div class="workspace">
+  <header class="topbar"><span id="breadcrumb">工作空间 / 资料库</span><div class="top-actions"><span id="connection" class="connection">正在连接</span><button class="icon-button" data-action="refresh" aria-label="刷新" data-icon="refresh"></button></div></header>
+  <main id="main" tabindex="-1"><div class="initial-state"><span class="loader"></span><h2>正在打开你的资料库</h2><p>读取本机录音与处理状态…</p></div></main>
+  <footer class="runtime" id="runtime"><span class="status-dot"></span><span>正在读取后台状态</span></footer>
+</div>
+<input type="file" id="file-input" multiple hidden accept="audio/*,video/*,.qta,.caf,.aif,.aiff,.flac">
+<div class="drop-overlay" id="drop-overlay" hidden><span class="drop-symbol">＋</span><h2>把录音放在这里</h2><p>支持批量导入 · 原文件保持不变 · 相同内容自动复用</p></div>
+<div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
+<dialog id="modal"><div class="modal-heading"><h2 id="modal-title"></h2><button class="icon-button" data-action="close-modal" aria-label="关闭">×</button></div><div id="modal-body"></div></dialog>
+</body></html>
