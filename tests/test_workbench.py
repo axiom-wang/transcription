@@ -331,6 +331,26 @@ def test_manual_scan_round_reports_summary_and_tolerates_syncing_files(config, m
     assert "发现 2 条新录音" in row["summary"] and "1 条录音仍在同步" in row["summary"]
 
 
+def test_scan_permission_denial_names_the_fix(config, monkeypatch):
+    from audio_notes import cli
+
+    store = WorkbenchStore(config.state)
+    request = store.enqueue("scan", {}, "扫描")
+
+    def fake_main(args):
+        atomic_json(
+            config.state / "voice-memos-status.json",
+            {"errors": [{"path": "/x", "error": "denied", "permission_denied": True}]},
+        )
+        return 1
+
+    monkeypatch.setattr(cli, "main", fake_main)
+    monkeypatch.setenv("AUDIO_NOTES_WORKBENCH_TASK", "1")
+    assert execute_request(config, request["id"]) == 1
+    row = store.requests()[0]
+    assert row["status"] == "failed" and "完全磁盘访问权限" in row["error"]
+
+
 def test_retired_service_request_and_action_are_not_run(http, config, monkeypatch):
     from audio_notes import cli
 

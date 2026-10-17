@@ -52,8 +52,17 @@ def test_exact_text_and_speaker_switch_preserve_punctuation():
     assert result[1]["start"] == 2
 
 
-def test_overlap_has_no_guessed_owner():
+def test_backchannel_overlap_keeps_dominant_exclusive_speaker():
     result = assign_segments(conversation(), [turn(0, 4)], [turn(0, 4), turn(0.2, 0.7, 2)])
+    assert [s["speaker"] for s in result] == ["speaker_1"]
+    assert result[0]["overlap"] is False
+    assert speaker_label(result[0]) == "说话人 1"
+
+
+def test_unsettled_overlap_has_no_guessed_owner():
+    exclusive = [turn(0, 0.5), turn(0.5, 4, 2)]
+    result = assign_segments(conversation(), exclusive, [turn(0, 4), turn(0.2, 4, 2)])
+    assert result[0]["text"] == "你好。"
     assert result[0]["overlap"] is True
     assert result[0]["speaker"] is None
     assert speaker_label(result[0]) == "重叠发言（归属待确认）"

@@ -1,6 +1,6 @@
 #!/bin/bash
 set -euo pipefail
-TASK_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+TASK_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$TASK_ROOT"
 if [[ ! -x "$TASK_ROOT/.venv/bin/audio-notes" ]]; then
   echo '尚未安装。请先运行 ./setup.sh' >&2

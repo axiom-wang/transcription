@@ -58,7 +58,15 @@ for index, (title, text) in enumerate([
         (directory / "polished.md").write_text("# 产品讨论\n\n## 转写交付稿\n\n[00:00](transcript.simplified.md#segment-1)\n\n"+text+"\n\n## 待核对的转写\n\n预算尚未确定，请核对讨论原文。\n")
         (directory / "polished.txt").write_text(text)
         (directory / "analysis.md").write_text("# 产品讨论分析\n\n## 先看重点（原话摘录）\n\n- 先把资料库、处理进度和原文核对做好。[00:03](transcript.simplified.md#segment-2)\n\n## 进一步分析（模型推断）\n\n建议优先验证用户能否顺利找到并核对文稿。\n")
-        atomic_json(directory / "enrichment.complete.json", {"fingerprint":"fixture", "quality_status":"needs_review", "created_at":"2026-10-16T05:00:00Z"})
+        fingerprint = "d" * 64
+        atomic_json(directory / "enrichment" / fingerprint / "result.json", {
+            "units": [{"id": i, "segment": i, "text": s["text"]} for i, s in enumerate(segments, 1)],
+            "polished": [{"paragraphs": [{"text": s["text"], "unit_ids": [i]} for i, s in enumerate(segments, 1)],
+                          "uncertainties": [{"unit_ids": [3], "text": "请核对预算数字"}]}],
+            "analysis": {"scene": "meeting", "brief": {"text": "讨论第一版录音工作台的功能范围，预算尚未决定。", "source_ids": [1, 3]},
+                         "themes": [], "actions": [{"text": segments[3]["text"], "source_ids": [4], "owner": "未明确", "deadline": "下一次讨论之前"}], "questions": []},
+        })
+        atomic_json(directory / "enrichment.complete.json", {"fingerprint": fingerprint, "quality_status": "needs_review", "created_at": "2026-10-16T05:00:00Z"})
         atomic_json(directory / "enrichment.status.json", {"status":"completed"})
     elif index == 1:
         atomic_json(directory / "enrichment.status.json", {"status":"failed", "error":"测试情景：文稿生成被中断，原稿已经保存。"})

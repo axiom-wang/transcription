@@ -76,7 +76,7 @@ def test_events_follow_real_work_and_skip_duplicates_and_repairs(config, fake_wo
     def notify(config, title, message):
         if title == "开始转写":
             assert not fake_worker.calls
-        if title == "转写完成":
+        if title == "原文已可读":
             assert (config.output / "index.md").is_file()
             assert len(pipeline.store.completed()) == 1
         events.append((title, message))
@@ -85,14 +85,14 @@ def test_events_follow_real_work_and_skip_duplicates_and_repairs(config, fake_wo
     pipeline = Pipeline(config, "profile", worker=fake_worker)
     try:
         assert pipeline.scan(watch=True).completed == 1
-        assert [title for title, _ in events] == ["开始转写", "转写完成"]
+        assert [title for title, _ in events] == ["原文已可读"]
         assert all("产品讨论" in message for _, message in events)
         assert all("测试录音" not in message for _, message in events)
         (config.inbox / "duplicate.wav").write_text("测试录音")
         assert pipeline.scan(watch=True).skipped == 2
         next(config.output.glob("*/notes.md")).unlink()
         assert pipeline.scan(watch=True).completed == 1
-        assert len(events) == 2
+        assert len(events) == 1
     finally:
         pipeline.close()
 
@@ -104,9 +104,9 @@ def test_failed_file_notifies_and_cooldown_stays_quiet(config, fake_worker, monk
     pipeline = Pipeline(config, "profile", worker=fake_worker)
     try:
         assert pipeline.scan(watch=True).failed == 1
-        assert events == ["开始转写", "转写失败"]
+        assert events == ["转写失败"]
         assert pipeline.scan(watch=True).waiting == 1
-        assert events == ["开始转写", "转写失败"]
+        assert events == ["转写失败"]
     finally:
         pipeline.close()
 

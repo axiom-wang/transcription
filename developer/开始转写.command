@@ -1,6 +1,6 @@
 #!/bin/bash
-TASK_ROOT="$(cd -- "$(dirname -- "$0")" && pwd)"
-"$TASK_ROOT/run.sh" run
+TASK_ROOT="$(cd -- "$(dirname -- "$0")/.." && pwd)"
+"$TASK_ROOT/developer/run.sh" run
 TASK_EXIT=$?
 echo
 if [[ $TASK_EXIT -eq 3 ]]; then

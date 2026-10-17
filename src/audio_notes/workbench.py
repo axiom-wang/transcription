@@ -41,6 +41,7 @@ from .workbench_tools import AGENTS, agent_context, delete_recording, find_agent
 log = logging.getLogger("audio_notes")
 STATIC = Path(__file__).with_name("web")
 MAX_UPLOAD = 2 * 1024**3
+API_VERSION = 2
 
 
 TEXT_ARTIFACTS = (".md", ".txt", ".srt")
@@ -88,6 +89,11 @@ def execute_request(config, key):
         args = ["--config", str(config.file)]
         started = time.time()
         try:
+            if request['kind'] == 'knowledge':
+                from .retrieval import run_query
+                run_query(Workbench(config), key, payload)
+                store.finish(key, 'completed')
+                return 0
             if request["kind"] == "transcribe":
                 args += ["transcribe", "--", *payload["paths"]]
             elif request["kind"] == "enrich":
@@ -97,7 +103,7 @@ def execute_request(config, key):
                     payload["job_id"],
                 ]
             elif request["kind"] == "diarize":
-                args += ["diarize", payload["job_id"]]
+                args += ["diarize", "--force", payload["job_id"]]
             elif request["kind"] == "title":
                 args += ["enrich", "--title", payload["job_id"]]
             elif request["kind"] == "scan":
@@ -122,6 +128,14 @@ def execute_request(config, key):
                         error = "说话人区分已完成，整理与分析稿仍待重试。"
             if code:
                 error = "本次操作未完成，请展开运行记录查看原因。已完成的文稿保留。"
+                scan = read_json(config.state / "voice-memos-status.json")
+                if request["kind"] == "scan" and any(
+                    e.get("permission_denied") for e in scan.get("errors", [])
+                ):
+                    error = (
+                        "macOS 拒绝听记读取语音备忘录目录。请在「系统设置 → 隐私与安全性 → "
+                        "完全磁盘访问权限」中允许「听记」，退出并重新打开听记后再扫描。"
+                    )
             if not code and request["kind"] == "enrich":
                 marker = read_json(config.output / payload["job_id"] / "enrichment.status.json")
                 if marker.get("status") != "completed":
@@ -165,12 +179,16 @@ class Workbench:
         self.child = None
         self.legacy_cache = (float("-inf"), {})
         self.legacy_removed = False
+        self.power_cache = (0, (False, False))
+        from .automatic import Watcher
+        self.watcher = Watcher(config, self.store)
 
     def scheduler(self):
         if not lock_busy(self.config.state / "workbench-execution" / "run.lock"):
             self.store.recover()
         while not self.stop.wait(1):
             try:
+                self.watcher.tick()
                 if self.child and self.child.poll() is None:
                     continue
                 if any(
@@ -186,7 +204,17 @@ class Workbench:
                 self.store.recover()
                 if paused(self.config):
                     continue
-                pending = self.store.pending()
+                candidates = [r for r in self.store.requests() if r['status'] == 'queued']
+                if not candidates:
+                    continue
+                candidates.sort(key=lambda r: (-r['priority'], r['created']))
+                from .automatic import allowed, power_and_idle
+                from .knowledge import Knowledge
+                prefs = Knowledge(self.config.state).preferences()
+                if time.monotonic() - self.power_cache[0] > 10:
+                    self.power_cache = (time.monotonic(), power_and_idle())
+                can_auto = prefs['automatic'] and allowed(prefs['timing'], *self.power_cache[1])
+                pending = next((r for r in candidates if not json.loads(r['payload']).get('automatic') or can_auto), None)
                 if not pending:
                     continue
                 path = self.config.state / "logs" / f"request-{pending['id']}.log"
@@ -243,14 +271,23 @@ class Workbench:
         refresh_index(self.config)
 
     def snapshot(self):
+        from .estimates import estimates
+        from .knowledge import Knowledge
         items = library(self.config, self.store)
         requests = self.store.requests()
+        waiting = backlog(self.config)
+        estimates(self.config, items, requests, waiting)
         for request in requests:
+            request["automatic"] = bool(json.loads(request.get("payload") or "{}").get("automatic"))
             request.pop("payload", None)
             request.pop("log", None)
         return {
+            "api_version": API_VERSION,
             "items": items,
-            "backlog": backlog(self.config),
+            "preferences": Knowledge(self.config.state).preferences(),
+            "automatic_status": self.watcher.reason,
+            "unread_results": any(i.get('ready_at', i['updated']) > Knowledge(self.config.state).get('settings', 'seen').get('time', 0) and i['asr_status'] == 'completed' for i in items),
+            "backlog": waiting,
             "requests": requests,
             "paused": paused(self.config),
             "busy": lock_busy(self.config.models / ".inference.lock"),
@@ -274,6 +311,10 @@ class Workbench:
 
     def action(self, data):
         action = data.get("action")
+        from .knowledge_api import knowledge_action
+        handled, result = knowledge_action(self, data)
+        if handled:
+            return result
         if action == "pause":
             if not isinstance(data.get("paused"), bool):
                 raise ValueError("暂停值无效")
@@ -283,6 +324,10 @@ class Workbench:
             self.store.request_action(data["id"], "retry" if action == "retry_request" else action)
             return {"ok": True}
         if action in ("scan", "notify"):
+            if action == 'scan':
+                for request in self.store.requests():
+                    if request['kind'] == 'scan' and request['status'] == 'queued' and json.loads(request['payload']).get('automatic'):
+                        self.store.request_action(request['id'], 'cancel')
             return self.store.enqueue(
                 action,
                 {},
@@ -295,9 +340,11 @@ class Workbench:
                 self.republish(entry["audio_hash"])
             return result
         if action == "rename_speaker":
+            from .knowledge_api import forget_voice_assignment
             names = self.store.rename_speaker(
                 entry["audio_hash"], data.get("speaker"), data.get("name", "")
             )
+            forget_voice_assignment(self.config, entry['id'], data.get('speaker'), data.get('name', ''))
             self.republish(entry["audio_hash"])
             return {"ok": True, "speakers": names}
         if action == "delete":
@@ -379,7 +426,7 @@ class Handler(BaseHTTPRequestHandler):
                 (value and secrets.compare_digest(value.value, self.server.app.token))
                 or secrets.compare_digest(bearer, self.server.app.token)
             ):
-                raise PermissionError("请通过「打开转写工作台.command」重新打开工作台")
+                raise PermissionError("请重新打开「听记」")
 
     def send(self, body, code=200, mime="application/json; charset=utf-8", headers=None):
         if isinstance(body, (dict, list)):
@@ -416,7 +463,7 @@ class Handler(BaseHTTPRequestHandler):
             path = unquote(parsed.path)
             params = parse_qs(parsed.query)
             app, config = self.server.app, self.server.app.config
-            static = {"/": "index.html", "/app.js": "app.js", "/style.css": "style.css"}
+            static = {"/": "index.html", "/app.js": "app.js", "/style.css": "style.css", "/knowledge.js": "knowledge.js"}
             self.guard(authenticated=path not in static and path != "/api/session")
             if post:
                 if path == "/api/session":
@@ -454,6 +501,9 @@ class Handler(BaseHTTPRequestHandler):
                 self.send(file.read_bytes(), mime=mime + "; charset=utf-8")
             elif path == "/api/library":
                 self.send(app.snapshot())
+            elif path == "/api/knowledge":
+                from .knowledge_api import knowledge_read
+                self.send(knowledge_read(app, {k: v[0] for k, v in params.items()}))
             elif path == "/api/detail":
                 self.send(detail(config, app.store, params.get("id", [""])[0]))
             elif path == "/api/document":
@@ -708,7 +758,7 @@ def serve(config, port=8765):
                 server.server_close()
                 record.unlink(missing_ok=True)
     except AlreadyRunning:
-        raise ValueError("工作台已启动，请使用 ./run.sh workbench --open") from None
+        raise ValueError("工作台已启动，请使用 ./developer/run.sh workbench --open") from None
 
 
 def ensure_workbench(config, port=8765):
@@ -725,8 +775,17 @@ def ensure_workbench(config, port=8765):
                     "GET", "/api/library", headers={"Authorization": "Bearer " + record["token"]}
                 )
                 response = connection.getresponse()
-                response.read()
+                snapshot = json.loads(response.read())
                 if response.status == 200:
+                    if snapshot.get('api_version', 1) < API_VERSION:
+                        if snapshot.get('busy') or snapshot.get('pipeline_busy') or any(r['status'] == 'running' for r in snapshot.get('requests', [])):
+                            raise RuntimeError('旧版本仍在处理录音，请等待当前任务完成后重新连接听记。')
+                        import signal
+                        os.kill(int(record['pid']), signal.SIGTERM)
+                        deadline = time.monotonic() + 5
+                        while lock_busy(config.state / 'workbench-server' / 'run.lock') and time.monotonic() < deadline:
+                            time.sleep(.1)
+                        return None
                     return record
             finally:
                 connection.close()

@@ -94,6 +94,9 @@ def process(request):
         {
             "turns": turns,
             "exclusive_turns": exclusive,
+            "embeddings": {mapping[label]: [float(v) for v in vector]
+                for label, vector in zip(output.speaker_diarization.labels(), output.speaker_embeddings)
+                if label in mapping and np.all(np.isfinite(vector))},
             "metrics": {
                 "elapsed_seconds": time.monotonic() - started,
             "device": device,

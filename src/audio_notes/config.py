@@ -53,7 +53,7 @@ class Config:
     def profile(self):
         manifest = self.model_dir / "local-model.json"
         if not manifest.is_file():
-            raise ValueError("模型未准备好。请先运行 ./run.sh download-model")
+            raise ValueError("模型未准备好。请先运行 ./developer/run.sh download-model")
         data = json.loads(manifest.read_text(encoding="utf-8"))
         if not data.get("model_sha256"):
             raise ValueError("模型清单不完整，请重新运行 download-model")

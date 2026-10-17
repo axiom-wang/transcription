@@ -159,15 +159,28 @@ def summarize(config, entry, metadata, busy):
             "stage": "正在处理（当前进程未提供细分进度）",
             "updated": log_path.stat().st_mtime if log_path.exists() else entry["updated"],
         }
+    from datetime import datetime
+
+    from .estimates import audio_duration
+    try:
+        text_ready = datetime.fromisoformat(receipt.get('created_at', '')).timestamp()
+    except (ValueError, TypeError):
+        text_ready = 0
+
+    from .knowledge import Knowledge, review_context
+    reviewed = Knowledge(config.state).get('review', entry['id'])
+    verified = bool(reviewed.get('complete') and reviewed.get('context') == review_context(config, entry['id'], directory))
     return {
+        "reviewed": verified,
         "id": entry["id"],
         "audio_hash": entry["audio_hash"],
         "title": title,
         "title_source": "custom" if meta.get("title") else "generated" if generated else "original",
         "created": entry["created"],
         "updated": entry["updated"],
+        "ready_at": max(entry["updated"], text_ready),
         "recorded_at": origin.get("recorded_at"),
-        "duration": raw.get("info", {}).get("duration"),
+        "duration": raw.get("info", {}).get("duration") or audio_duration(entry["source"]),
         "source_kind": "语音备忘录" if origin else "手动导入",
         "asr_status": asr_status,
         "text_status": text_status,
@@ -177,10 +190,11 @@ def summarize(config, entry, metadata, busy):
         "text_error": text.get("error"),
         "available": available,
         "text_available": complete,
+        "text_generated_at": receipt.get("created_at"),
         "text_speaker_stale": text_speaker_stale,
         "favorite": bool(meta.get("favorite")),
         "archived": bool(meta.get("archived")),
-        "needs_review": receipt.get("quality_status") == "needs_review",
+        "needs_review": receipt.get("quality_status") == "needs_review" and not verified,
         "progress": progress,
         "attempts": entry["attempts"],
         "preview": re.sub(r"\s+", " ", raw.get("text", ""))[:170],
@@ -236,6 +250,11 @@ def detail(config, store, key):
             "speaker": s.get("speaker"),
             "speaker_label": rename_speakers(speaker_label(s), names),
             "overlap": s.get("overlap", False),
+            "confidence": min(
+                (w["probability"] for w in (s.get("words") or [])
+                 if isinstance(w.get("probability"), (float, int))),
+                default=None,
+            ),
         }
         for i, s in enumerate(raw.get("segments", []), 1)
     ]
@@ -266,7 +285,9 @@ def detail(config, store, key):
         for r in rows(config)
         if r["audio_hash"] == entry["audio_hash"]
     ]
-    return item
+    from .knowledge import decorate
+
+    return decorate(config, item)
 
 
 def historical_artifact(config, key, name, version):
@@ -320,6 +341,8 @@ def backlog(config):
     """Unregistered local inbox files, including files still settling; no content reads."""
     import time
 
+    from .estimates import audio_duration
+
     known = set()
     path = config.state / "jobs.sqlite3"
     if path.is_file():
@@ -351,6 +374,7 @@ def backlog(config):
             result.append(
                 {
                     "name": origin.get("recording_title") or file.stem,
+                    "duration": audio_duration(file),
                     "size": stat.st_size,
                     "settling": stat.st_size == 0
                     or time.time() - stat.st_mtime < config.processing["settle_seconds"],

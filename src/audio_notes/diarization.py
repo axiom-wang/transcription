@@ -26,7 +26,7 @@ MODEL_FILES = (
     "plda/xvec_transform.npz",
 )
 SCHEMA = 1
-VIEW_SCHEMA = 2
+VIEW_SCHEMA = 3
 
 
 def check_speaker_model(config, verify=False):
@@ -212,9 +212,12 @@ def _assignment(start, end, exclusive, regular):
     ranked = sorted(scores.items(), key=lambda item: item[1], reverse=True)
     if point and len(ranked) != 1:
         return None, overlap
-    if overlap or not ranked or ranked[0][1] / duration < 0.6:
+    if not ranked or ranked[0][1] / duration < 0.6:
         return None, overlap
-    return ranked[0][0], overlap
+    # Exclusive turns already pick the dominant voice inside overlapping speech, so a
+    # brief back-channel under the main speaker keeps that speaker. Only overlap the
+    # exclusive turns cannot settle stays unattributed.
+    return ranked[0][0], False
 
 
 def assign_segments(segments, exclusive, regular):
@@ -407,6 +410,7 @@ def diarize_one(config, job, manifest, force=False, worker=run_speaker_worker):
         raise ValueError("处理期间原文或音频改变，未发布说话人结果")
     result = {
         **data,
+        "embeddings": data.get("embeddings", {}),
         "schema": SCHEMA,
         "repository": REPO,
         "revision": REVISION,
@@ -421,6 +425,10 @@ def diarize_one(config, job, manifest, force=False, worker=run_speaker_worker):
     # Validate exact text preservation before publishing even the sidecar.
     assign_segments(raw["segments"], data["exclusive_turns"], data["turns"])
     atomic_json(old, result)
+    from .estimates import record
+    from .knowledge_api import match_voices
+    match_voices(config, raw['job_id'], raw['audio_sha256'], result.get('embeddings', {}))
+    record(config, raw['job_id'], 'speaker', raw['info'].get('duration'), result.get('metrics', {}).get('elapsed_seconds', 0))
     return True
 
 

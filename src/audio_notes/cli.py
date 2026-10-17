@@ -45,7 +45,7 @@ def status(config):
             print(f"  {error['path']}：{error['error']}")
     path = config.state / "jobs.sqlite3"
     if not path.exists():
-        print("尚无转写任务。运行 ./run.sh 自动导入已同步的语音备忘录")
+        print("尚无转写任务。运行 ./developer/run.sh 自动导入已同步的语音备忘录")
         return
     with sqlite3.connect(path.as_uri() + "?mode=ro", uri=True) as db:
         rows = db.execute("SELECT status, COUNT(*) FROM jobs GROUP BY status").fetchall()

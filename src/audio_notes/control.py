@@ -41,8 +41,10 @@ def lock_busy(path):
 
 def activity(path, stage, **fields):
     if path:
+        previous = read_json(path)
+        started = previous.get('started', time.time()) if previous.get('pid') == os.getpid() else time.time()
         atomic_json(
-            Path(path), {"stage": stage, "updated": time.time(), "pid": os.getpid(), **fields}
+            Path(path), {"stage": stage, "updated": time.time(), "started": started, "pid": os.getpid(), **fields}
         )
 
 

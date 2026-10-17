@@ -188,7 +188,7 @@ def test_legacy_agent_is_removed_and_cannot_be_reinstalled(imported_config, tmp_
     assert not plist.exists()
     assert calls == [("bootout", f"gui/{os.getuid()}/{service.identity(imported_config)}")]
     assert not service.cleanup_legacy(imported_config)
-    with pytest.raises(ValueError, match="手动扫描"):
+    with pytest.raises(ValueError, match="自动处理已并入听记"):
         service.manage(imported_config, "install")
     assert not plist.exists()
 

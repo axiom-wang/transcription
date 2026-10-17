@@ -8,8 +8,8 @@ else
   echo '需要 uv（推荐 brew install uv），以及 Python 3.11–3.13。' >&2
   exit 2
 fi
-./run.sh download-model
-./run.sh doctor
+./developer/run.sh download-model
+./developer/run.sh doctor
 if .venv/bin/python -c 'from pathlib import Path; from audio_notes.config import load_config; raise SystemExit(0 if load_config(Path("config.toml")).analysis["enabled"] else 1)'; then
   ./setup-text.sh
 fi
@@ -18,4 +18,4 @@ fi
 if .venv/bin/python -c 'from pathlib import Path; from audio_notes.config import load_config; raise SystemExit(0 if load_config(Path("config.toml")).speakers["enabled"] else 1)'; then
   ./setup-speakers.sh
 fi
-echo '安装完成。运行 ./run.sh 自动接收语音备忘录；后台权限准备好后运行 ./run.sh service install。'
+echo '安装完成。运行 ./developer/run.sh 自动接收语音备忘录；打开听记后在设置中选择自动处理时机。'

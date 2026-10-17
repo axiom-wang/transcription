@@ -116,6 +116,18 @@ def delete_recording(config, store, key, delete_audio=False):
         shutil.rmtree(config.state / "agent-context" / version, ignore_errors=True)
     shutil.rmtree(config.state / "workbench-preview" / audio_hash, ignore_errors=True)
     store.forget(audio_hash)
+    from .knowledge import Knowledge
+    knowledge = Knowledge(config.state)
+    for kind in ('revisions', 'members', 'tasks'):
+        for item in knowledge.all(kind):
+            if item.get('recording') in ids:
+                knowledge.delete(kind, item['id'])
+    for version in ids:
+        for kind in ('scene', 'review'):
+            knowledge.delete(kind, version)
+    for person in knowledge.all('people'):
+        person['voices'] = [v for v in person['voices'] if v['source'].split(':')[0] not in ids]
+        knowledge.put('people', person['id'], person)
     trashed, kept, apple = 0, [], 0
     if delete_audio:
         for value in paths:

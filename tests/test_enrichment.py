@@ -511,3 +511,36 @@ def test_naming_failure_keeps_delivery_and_backs_off(document, monkeypatch):
     enrich_completed(config, jobs, worker=broken)
     assert len(calls) == 1 and (directory / "polished.md").is_file()
     assert json.loads((directory / "title.status.json").read_text())["status"] == "failed"
+
+
+def test_scene_switch_reuses_body_and_preserves_original(document):
+    from audio_notes.knowledge import Knowledge
+    config, directory, _ = document
+    raw = json.loads((directory / 'raw.json').read_text())
+    before = sha256_file(directory / 'raw.json')
+    enrich_one(config, directory, {}, worker=fake_text_worker)
+    old_body = (directory / 'polished.txt').read_text()
+    Knowledge(config.state).put('scene', raw['job_id'], {'scene': 'interview'})
+    captured = []
+    def worker(config, request, request_path, log):
+        captured.append(request)
+        fake_text_worker(config, request, request_path, log)
+    enrich_one(config, directory, {}, force=True, worker=worker)
+    assert captured[0]['reuse_polished']
+    assert '问答脉络' in captured[0]['prompts']['analyze']
+    assert (directory / 'polished.txt').read_text() == old_body
+    assert list(directory.glob('history/*/polished.txt'))
+    assert sha256_file(directory / 'raw.json') == before
+
+
+def test_new_glossary_does_not_rewrite_existing_delivery(document):
+    from audio_notes.enrichment import existing_delivery_valid
+    from audio_notes.knowledge import Knowledge
+    config, directory, jobs = document
+    enrich_one(config, directory, {}, worker=fake_text_worker)
+    old_fingerprint = fingerprint(config, directory / 'raw.json', {})
+    Knowledge(config.state).term({'correct': '费用', 'wrong': ['预算']})
+    assert fingerprint(config, directory / 'raw.json', {}) != old_fingerprint
+    assert existing_delivery_valid(config, directory)
+    Knowledge(config.state).put('scene', jobs[0]['id'], {'scene': 'class'})
+    assert not existing_delivery_valid(config, directory)

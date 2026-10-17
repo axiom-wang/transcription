@@ -21,8 +21,8 @@ on open recordings
 end open
 
 on startTranscription(recordings)
-    set projectDirectory to do shell script "/usr/bin/dirname " & quoted form of (POSIX path of (path to me))
-    set launcher to projectDirectory & "/run.sh"
+    set projectDirectory to do shell script "/usr/bin/dirname $(/usr/bin/dirname " & quoted form of (POSIX path of (path to me)) & ")"
+    set launcher to projectDirectory & "/developer/run.sh"
     set pythonExecutable to projectDirectory & "/.venv/bin/python"
     try
         do shell script "/bin/test -x " & quoted form of launcher & " && /bin/test -x " & quoted form of pythonExecutable

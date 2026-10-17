@@ -69,7 +69,7 @@ def write_icon(path):
 
 def build(root, destination=None):
     root = Path(root).resolve()
-    if not (root / "run.sh").is_file() or not (root / ".venv/bin/python").exists():
+    if not (root / "developer/run.sh").is_file() or not (root / ".venv/bin/python").exists():
         raise ValueError("请先在此项目完成安装，准备 run.sh 与 .venv")
     default = (
         Path("/Applications")
@@ -128,10 +128,18 @@ def build(root, destination=None):
             "CFBundlePackageType": "APPL",
             "CFBundleInfoDictionaryVersion": "6.0",
             "CFBundleShortVersionString": "2.0.0",
-            "CFBundleVersion": "2",
+            "CFBundleVersion": "3",
+            "CFBundleDocumentTypes": [{"CFBundleTypeName": "录音", "CFBundleTypeRole": "Viewer", "LSHandlerRank": "Alternate", "LSItemContentTypes": ["public.audio", "public.movie", "local.audio-notes.qta"], "CFBundleTypeExtensions": ["m4a", "mp3", "wav", "qta", "caf", "mp4", "mov", "aiff", "flac"]}],
+            "UTImportedTypeDeclarations": [{
+                "UTTypeIdentifier": "local.audio-notes.qta",
+                "UTTypeDescription": "QuickTime 音频",
+                "UTTypeConformsTo": ["public.audio", "com.apple.quicktime-movie"],
+                "UTTypeTagSpecification": {"public.filename-extension": ["qta"]},
+            }],
             "CFBundleIconFile": "Workbench.icns",
             "LSMinimumSystemVersion": "13.0",
             "NSHighResolutionCapable": True,
+            "NSAppleEventsUsageDescription": "将您选择的待办发送到提醒事项，并保留原话和来源信息。",
             "NSPrincipalClass": "NSApplication",
             "NSAppTransportSecurity": {"NSAllowsLocalNetworking": True},
             "LSApplicationCategoryType": "public.app-category.productivity",

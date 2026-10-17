@@ -31,7 +31,7 @@ def check_model(directory: Path, verify=True):
         return check_qwen_model(directory, verify)
     for name in (*REQUIRED, "local-model.json"):
         if not (directory / name).is_file():
-            raise ValueError(f"缺少模型文件 {directory / name}；运行 ./run.sh download-model")
+            raise ValueError(f"缺少模型文件 {directory / name}；运行 ./developer/run.sh download-model")
     manifest = json.loads((directory / "local-model.json").read_text(encoding="utf-8"))
     if not all(name in manifest.get("files", {}) for name in REQUIRED):
         raise ValueError("模型清单无效；运行 download-model --refresh 修复")
@@ -52,7 +52,7 @@ def check_model(directory: Path, verify=True):
 def check_qwen_model(directory, verify=True):
     for name in (*QWEN_FILES, "local-model.json"):
         if not (directory / name).is_file():
-            raise ValueError(f"缺少模型文件 {directory / name}；运行 ./run.sh download-model")
+            raise ValueError(f"缺少模型文件 {directory / name}；运行 ./developer/run.sh download-model")
     manifest = json.loads((directory / "local-model.json").read_text(encoding="utf-8"))
     if (
         manifest.get("model") != QWEN_MODEL

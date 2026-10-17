@@ -309,6 +309,14 @@ def process(request):
             return title
         raise ValueError(f"录音名称三次生成仍未通过检查：{error}")
 
+    if request.get("mode") == "retrieval":
+        from .retrieval import validate_retrieval
+        result = generate_json('answer', request['instruction'],
+            {'question': request['question'], 'sources': [{'source': i, 'text': s['text']} for i, s in enumerate(request['sources'])]},
+            lambda r: validate_retrieval(r, request['retrieval_mode'], request['sources']))
+        atomic_json(work / 'answer.json', result)
+        return
+
     if request.get("mode") == "title":
         if units:
             write_title()
@@ -325,6 +333,11 @@ def process(request):
 
     polished, summaries = [], []
     for i, chunk in enumerate(polish_chunks):
+        reusable = request.get('reuse_polished')
+        if isinstance(reusable, list) and len(reusable) == len(polish_chunks):
+            validate_polish(reusable[i], chunk)
+            polished.append(reusable[i])
+            continue
         report("整理文稿", completed=i, total=len(polish_chunks), unit="段")
         polished.append(
             generate_json(

@@ -8,7 +8,7 @@ import sys
 from pathlib import Path
 
 log = logging.getLogger("audio_notes")
-MANUAL_HELP = "已改为在听记中手动扫描：打开听记，点击「立即扫描」即可处理新录音。"
+MANUAL_HELP = "自动处理已并入听记：打开听记，在设置中选择处理时机，也可点击「立即扫描」。"
 
 
 def identity(config):
@@ -58,9 +58,9 @@ def manage(config, action):
     if action == "status":
         print(f"服务配置：{agent_path(config)}\nPython：{Path(sys.executable).resolve()}")
         if registered(config) or agent_path(config).is_file():
-            print("检测到旧的自动扫描服务；运行 ./run.sh service uninstall 可清理。")
+            print("检测到旧的自动扫描服务；运行 ./developer/run.sh service uninstall 可清理。")
         else:
-            print("没有后台自动扫描服务。")
+            print("没有旧版 launchd 自动扫描服务；听记的自动处理由应用内调度。")
         print(MANUAL_HELP)
         return
     if action in ("stop", "uninstall"):

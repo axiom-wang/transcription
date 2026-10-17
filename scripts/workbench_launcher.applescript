@@ -11,7 +11,7 @@ on openWorkbench()
         set bundlePath to POSIX path of (path to me)
         set settingsPath to bundlePath & "Contents/Resources/Project.plist"
         set projectDirectory to do shell script "/usr/libexec/PlistBuddy -c 'Print :ProjectPath' " & quoted form of settingsPath
-        set launcher to projectDirectory & "/run.sh"
+        set launcher to projectDirectory & "/developer/run.sh"
         set configPath to projectDirectory & "/config.toml"
         do shell script "/bin/test -x " & quoted form of launcher & " && /bin/test -x " & quoted form of (projectDirectory & "/.venv/bin/python")
         with timeout of 60 seconds

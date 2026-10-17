@@ -305,13 +305,16 @@ class Pipeline:
                         backup = directory / f"raw.invalid-{time.time_ns()}.json"
                         raw_path.rename(backup)
                         log.warning("原始缓存无效，已保留到 %s，将重新转写", backup)
+                    from .knowledge import Knowledge
+                    glossary = Knowledge(self.config.state).glossary()
                     request = {
                         "job_id": job_id,
                         "audio_hash": audio_hash,
                         "profile": self.profile,
                         "source": str(source),
                         "model_dir": str(self.config.model_dir),
-                        "settings": self.config.whisper,
+                        "settings": {**self.config.whisper, 'initial_prompt':
+                            (self.config.whisper.get('initial_prompt', '') + '\n' + glossary).strip()},
                         "raw_path": str(raw_path),
                     }
                     origin_path = source.with_suffix(source.suffix + ".origin.json")
@@ -329,11 +332,13 @@ class Pipeline:
                         except (OSError, ValueError, KeyError, TypeError, AttributeError):
                             log.warning("导入来源记录无效，仍将转写音频：%s", origin_path)
                     log.info("开始本地转写：%s", source.name)
-                    notify(self.config, "开始转写", recording_name)
+                    asr_started = time.monotonic()
                     self.worker(self.config, request, self.config.state / "logs" / f"{job_id}.log")
                     raw = load_raw(raw_path, job_id, audio_hash, self.profile)
                     if raw is None:
                         raise RuntimeError("转写进程没有生成有效原始结果")
+                    from .estimates import record
+                    record(self.config, job_id, 'asr', raw['info'].get('duration'), time.monotonic() - asr_started)
                 else:
                     log.info("利用原始转写缓存重新生成文档：%s", source.name)
                 write_exports(raw, directory, self.config.markdown)
@@ -342,11 +347,12 @@ class Pipeline:
                 self.write_index()
                 counts.completed += 1
                 log.info("完成：%s → %s", source.name, directory)
-                if announce_completion:
+                from .knowledge import Knowledge
+                if announce_completion and (Knowledge(self.config.state).preferences()['notification'] == 'stages' or not self.config.analysis.get('enabled')):
                     notify(
                         self.config,
-                        "转写完成",
-                        f"{recording_name}\nTXT 已保存到「转写TXT」，阅读版和完整稿可在索引查看。",
+                        "原文已可读",
+                        f"{recording_name}\n可以先阅读原文，智能稿将在完成后通知。",
                     )
             except KeyboardInterrupt:
                 if job_id:

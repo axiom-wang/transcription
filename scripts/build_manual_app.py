@@ -7,7 +7,7 @@ from pathlib import Path
 
 def build(root):
     root = Path(root)
-    app = root / "手动转写.app"
+    app = root / "developer/手动转写.app"
     subprocess.run([
         "/usr/bin/osacompile", "-o", str(app),
         str(root / "scripts/manual_transcription.applescript"),

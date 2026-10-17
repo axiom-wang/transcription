@@ -2,7 +2,25 @@ import Cocoa
 import WebKit
 import UniformTypeIdentifiers
 
+final class StatusDropView: NSView {
+    var onDrop: (([URL]) -> Void)?
+    var onClick: (() -> Void)?
+    override func mouseDown(with event: NSEvent) { onClick?() }
+    override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation { .copy }
+    override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        guard let urls = sender.draggingPasteboard.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL], !urls.isEmpty else { return false }
+        onDrop?(urls)
+        return true
+    }
+}
+
 final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavigationDelegate, WKUIDelegate, WKDownloadDelegate, WKScriptMessageHandler {
+    var statusItem: NSStatusItem!
+    var apiToken = ""
+    var nativeUploads = 0
+    var pendingFiles: [URL] = []
+    var menuSnapshot: [String: Any] = [:]
+    var statusTimer: Timer?
     var window: NSWindow!
     var webView: WKWebView!
     var loadingView: NSView!
@@ -18,6 +36,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         installMenu()
+        installStatusItem()
         let configuration = WKWebViewConfiguration()
         configuration.websiteDataStore = .default()
         configuration.preferences.javaScriptCanOpenWindowsAutomatically = false
@@ -44,6 +63,114 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
         startService()
+    }
+
+    func installStatusItem() {
+        statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+        guard let button = statusItem.button else { return }
+        button.image = NSImage(systemSymbolName: "waveform", accessibilityDescription: "听记")
+        button.image?.isTemplate = true
+        button.title = ""
+        let drop = StatusDropView(frame: button.bounds)
+        drop.autoresizingMask = [.width, .height]
+        drop.registerForDraggedTypes([.fileURL])
+        drop.onDrop = { self.importURLs($0) }
+        drop.onClick = { self.openStatusMenu() }
+        button.addSubview(drop)
+    }
+    func apiAction(_ body: [String: Any]) {
+        guard let origin = origin else { return }
+        var request = URLRequest(url: origin.appendingPathComponent("api/action"))
+        request.httpMethod = "POST"
+        request.setValue("Bearer " + apiToken, forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try? JSONSerialization.data(withJSONObject: body)
+        URLSession.shared.dataTask(with: request) { data, response, error in
+            if let response = response as? HTTPURLResponse, response.statusCode >= 400 {
+                let result = data.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
+                DispatchQueue.main.async { self.showAlert("操作未完成", result?["error"] as? String ?? "请稍后重试") }
+            }
+            DispatchQueue.main.async { self.pollStatus() }
+        }.resume()
+    }
+    func pollStatus() {
+        guard let origin = origin else { return }
+        var request = URLRequest(url: origin.appendingPathComponent("api/library"))
+        request.setValue("Bearer " + apiToken, forHTTPHeaderField: "Authorization")
+        URLSession.shared.dataTask(with: request) { data, _, _ in
+            guard let data = data, let snapshot = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return }
+            DispatchQueue.main.async {
+                self.menuSnapshot = snapshot
+                let items = snapshot["items"] as? [[String: Any]] ?? []
+                let requests = snapshot["requests"] as? [[String: Any]] ?? []
+                let scan = snapshot["scan"] as? [String: Any] ?? [:]
+                let scanErrors = scan["errors"] as? [[String: Any]] ?? []
+                let issues = !scanErrors.isEmpty || requests.contains { ["failed", "interrupted"].contains($0["status"] as? String ?? "") } || items.contains { ["failed", "interrupted", "blocked"].contains($0["asr_status"] as? String ?? "") || ["failed", "interrupted", "blocked"].contains($0["text_status"] as? String ?? "") || ["failed", "interrupted", "blocked"].contains($0["speaker_status"] as? String ?? "") }
+                let active = requests.contains { $0["status"] as? String == "running" } || snapshot["busy"] as? Bool == true
+                self.statusItem.button?.title = issues ? "⚠︎" : active ? "◌" : snapshot["unread_results"] as? Bool == true ? "🔴" : ""
+                self.statusItem.button?.toolTip = issues ? "听记：需要处理" : active ? "听记：处理中" : "听记"
+            }
+        }.resume()
+    }
+    func openStatusMenu() {
+        let menu = NSMenu()
+        let items = menuSnapshot["items"] as? [[String: Any]] ?? []
+        let active = items.first { $0["asr_status"] as? String == "running" || $0["text_status"] as? String == "running" || $0["speaker_status"] as? String == "running" }
+        let progress = active?["progress"] as? [String: Any]
+        menu.addItem(withTitle: progress?["stage"] as? String ?? (menuSnapshot["automatic_status"] as? String ?? "连接本地资料库…"), action: nil, keyEquivalent: "")
+        if let title = active?["title"] as? String { menu.addItem(withTitle: String(title.prefix(35)), action: nil, keyEquivalent: "") }
+        if let completed = progress?["completed"] as? Int, let total = progress?["total"] as? Int, total > 0 {
+            menu.addItem(withTitle: "已完成 \(completed) / \(total)", action: nil, keyEquivalent: "")
+        }
+        menu.addItem(.separator())
+        let recent = items.filter { $0["asr_status"] as? String == "completed" }.sorted { ($0["ready_at"] as? Double ?? 0) > ($1["ready_at"] as? Double ?? 0) }
+        for recording in recent.prefix(5) {
+            let item = menu.addItem(withTitle: String((recording["title"] as? String ?? "录音").prefix(40)), action: #selector(openRecent(_:)), keyEquivalent: "")
+            item.representedObject = recording["id"]
+            item.target = self
+        }
+        menu.addItem(.separator())
+        for (title, selector) in [(menuSnapshot["paused"] as? Bool == true ? "恢复后续处理" : "暂停后续处理", #selector(togglePause)), ("立即扫描", #selector(scanNow)), ("打开听记", #selector(showWindow))] {
+            let item = menu.addItem(withTitle: title, action: selector, keyEquivalent: "")
+            item.target = self
+        }
+        if let button = statusItem.button { menu.popUp(positioning: nil, at: NSPoint(x: 0, y: button.bounds.minY), in: button) }
+    }
+    @objc func togglePause() { apiAction(["action": "pause", "paused": !(menuSnapshot["paused"] as? Bool ?? false)]) }
+    @objc func scanNow() { apiAction(["action": "scan"]) }
+    @objc func openRecent(_ sender: NSMenuItem) {
+        showWindow()
+        if let id = sender.representedObject as? String,
+           let encoded = try? JSONSerialization.data(withJSONObject: [id]),
+           let json = String(data: encoded, encoding: .utf8) {
+            webView.evaluateJavaScript("openDetail(" + json + "[0]).catch(e=>toast(e.message,true))", completionHandler: nil)
+            apiAction(["action": "seen_results"])
+        }
+    }
+    func application(_ sender: NSApplication, openFiles filenames: [String]) {
+        importURLs(filenames.map { URL(fileURLWithPath: $0) })
+        sender.reply(toOpenOrPrint: .success)
+    }
+    func importURLs(_ urls: [URL]) {
+        guard connected, let origin = origin else { pendingFiles.append(contentsOf: urls); return }
+        showWindow()
+        for url in urls {
+            nativeUploads += 1
+            var request = URLRequest(url: origin.appendingPathComponent("api/upload"))
+            request.httpMethod = "POST"
+            request.setValue("Bearer " + apiToken, forHTTPHeaderField: "Authorization")
+            request.setValue(url.lastPathComponent.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed), forHTTPHeaderField: "X-Filename")
+            URLSession.shared.uploadTask(with: request, fromFile: url) { data, response, error in
+                DispatchQueue.main.async {
+                    self.nativeUploads -= 1
+                    if let error = error { self.showAlert("导入未完成", error.localizedDescription); return }
+                    if (response as? HTTPURLResponse)?.statusCode ?? 500 >= 400 {
+                        let result = data.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
+                        self.showAlert("导入未完成", result?["error"] as? String ?? "请检查音频格式后重试")
+                    } else { self.webView.evaluateJavaScript("refresh(true)", completionHandler: nil) }
+                }
+            }.resume()
+        }
     }
 
     func buildLoadingView() {
@@ -192,6 +319,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
                 }
                 DispatchQueue.main.async {
                     self.origin = url
+                    self.apiToken = token
                     self.starting = false
                     self.webView.load(URLRequest(url: launchURL))
                 }
@@ -220,6 +348,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
         spinner.stopAnimation(nil)
         loadingView.isHidden = true
         window.makeFirstResponder(webView)
+        apiAction(["action": "auto_scan"])
+        pollStatus()
+        statusTimer?.invalidate()
+        statusTimer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { _ in self.pollStatus() }
+        if !pendingFiles.isEmpty { let files = pendingFiles; pendingFiles = []; importURLs(files) }
     }
     func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
         if (error as NSError).code != NSURLErrorCancelled { fail("无法连接本地工作台：" + error.localizedDescription) }
@@ -293,7 +426,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
         guard connected else { completion(true); return }
         webView.evaluateJavaScript("typeof state!=='undefined' && (state.dirty || state.uploading)") { value, error in
             if error != nil { completion(false); self.showAlert("暂时无法确认保存状态", "请稍后再试，避免丢失尚未保存的内容。"); return }
-            if value as? Bool != true && self.activeDownloads.isEmpty { completion(true); return }
+            if value as? Bool != true && self.activeDownloads.isEmpty && self.nativeUploads == 0 { completion(true); return }
             let alert = NSAlert()
             alert.messageText = "有尚未保存或传输完成的内容"
             alert.informativeText = "离开可能丢失未保存的笔记或中断文件传输。已提交的后台处理任务会继续运行。"
