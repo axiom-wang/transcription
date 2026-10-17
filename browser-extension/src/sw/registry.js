@@ -186,10 +186,11 @@ export function clear() {
 /**
  * 已授权（信念上）的 Tab —— 即可以直接开录的那些。
  * 包含 done/error 状态：停止捕获不会撤销授权，所以它们仍可再次录制。
+ * origin 为空表示授权已知失效（跨源跳转、标签页已关闭、恢复保存的旧录音），不算在内。
  */
 export function armedTabIds() {
   return all()
-    .filter((r) => r.state === S.ARMED || r.state === S.DONE || r.state === S.ERROR)
+    .filter((r) => r.origin && (r.state === S.ARMED || r.state === S.DONE || r.state === S.ERROR))
     .sort((a, b) => a.index - b.index)
     .map((r) => r.tabId);
 }

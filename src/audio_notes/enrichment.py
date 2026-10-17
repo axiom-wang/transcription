@@ -575,6 +575,8 @@ def run_text_worker(config, request, request_path, worker_log, resource_fd=None)
 def _run_text_worker(config, request, request_path, worker_log, resource_fd):
     from .pipeline import config_lock_fd, stop_worker
 
+    error_path = Path(request["work"]) / "worker-error.json"
+    error_path.unlink(missing_ok=True)
     atomic_json(request_path, request)
     worker_log.parent.mkdir(parents=True, exist_ok=True)
     environment = dict(
@@ -615,6 +617,12 @@ def _run_text_worker(config, request, request_path, worker_log, resource_fd):
             stop_worker(process)
             raise
     if process.returncode:
+        try:
+            detail = json.loads(error_path.read_text()).get("error")
+        except (OSError, ValueError):
+            detail = None
+        if isinstance(detail, str) and detail:
+            raise RuntimeError(f"文稿生成失败：{detail}。原始转写已保留。")
         raise RuntimeError(f"本地文本处理未完成；详见 {worker_log}")
 
 

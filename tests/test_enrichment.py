@@ -293,8 +293,9 @@ with open(sys.argv[1], 'a+') as f:
     )
 
 
+@pytest.mark.parametrize("fragment", [None, "天", "不", "3000元"])
 def test_long_recording_worker_covers_all_chunks_and_merges_original_evidence(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, fragment
 ):
     import sys
     from types import ModuleType, SimpleNamespace
@@ -367,6 +368,8 @@ def test_long_recording_worker_covers_all_chunks_and_merges_original_evidence(
     units = [
         {"id": i, "segment": i, "text": f"第{i}段只是提议，尚未决定。" * 30} for i in range(1, 6)
     ]
+    if fragment is not None:
+        units.append({"id": 6, "segment": 6, "text": fragment, "overlap": True})
     request = {
         "work": str(tmp_path),
         "units": units,
@@ -377,7 +380,10 @@ def test_long_recording_worker_covers_all_chunks_and_merges_original_evidence(
     process(request)
     result = json.loads((tmp_path / "result.json").read_text())
     assert len(result["polished"]) > 1
-    assert result["analysis"]["brief"]["source_ids"] == [1, 2, 3, 4, 5]
+    assert result["analysis"]["brief"]["source_ids"] == [u["segment"] for u in units]
+    if fragment is not None:
+        assert result["polished"][-1]["paragraphs"] == [{"unit_ids": [6], "text": fragment}]
+        assert all(data.strip() != fragment for kind, data in seen if kind == "polish")
     assert any(kind == "merge" for kind, _ in seen)
     assert [u["text"] for kind, data in seen if kind == "analyze" for u in data] == [
         u["text"] for u in units
@@ -544,3 +550,106 @@ def test_new_glossary_does_not_rewrite_existing_delivery(document):
     assert existing_delivery_valid(config, directory)
     Knowledge(config.state).put('scene', jobs[0]['id'], {'scene': 'class'})
     assert not existing_delivery_valid(config, directory)
+
+
+def test_worker_reports_structured_failure(tmp_path, monkeypatch):
+    from audio_notes import text_worker
+    request = tmp_path / "request.json"
+    atomic_json(request, {"work": str(tmp_path)})
+    monkeypatch.setattr("sys.argv", ["worker", str(request)])
+    def fail(request):
+        raise ValueError("polish-1 两次生成仍未通过检查")
+    monkeypatch.setattr(text_worker, "process", fail)
+    assert text_worker.main() == 1
+    assert json.loads((tmp_path / "worker-error.json").read_text())["error"] == "polish-1 两次生成仍未通过检查"
+
+
+def fake_mlx(monkeypatch, respond):
+    """Stand-in MLX stack; respond(prompt) returns the complete model reply."""
+    import sys
+    from types import ModuleType, SimpleNamespace
+
+    tokenizer = SimpleNamespace(
+        apply_chat_template=lambda messages, **kw: messages[-1]["content"],
+        encode=lambda text: list(map(ord, text)),
+    )
+    mx = ModuleType("mlx.core")
+    mx.set_cache_limit = mx.set_memory_limit = mx.clear_cache = lambda *a: None
+    mx.random = SimpleNamespace(seed=lambda *a: None)
+    mlx = ModuleType("mlx")
+    mlx.core = mx
+    lm = ModuleType("mlx_lm")
+    lm.load = lambda *a, **k: (None, tokenizer)
+
+    def generate(model, tokenizer, prompt, **kwargs):
+        prompt = "".join(map(chr, prompt))
+        yield SimpleNamespace(
+            text=respond(prompt),
+            finish_reason="stop",
+            prompt_tokens=len(prompt),
+            generation_tokens=1,
+            generation_tps=1,
+            peak_memory=0,
+        )
+
+    lm.stream_generate = generate
+    sampling = ModuleType("mlx_lm.sample_utils")
+    sampling.make_logits_processors = sampling.make_sampler = lambda **kw: None
+    for name, value in {
+        "mlx": mlx,
+        "mlx.core": mx,
+        "mlx_lm": lm,
+        "mlx_lm.sample_utils": sampling,
+    }.items():
+        monkeypatch.setitem(sys.modules, name, value)
+
+
+WORKER_SETTINGS = {"chunk_chars": 1000, "max_input_tokens": 16000, "max_output_tokens": 6000}
+
+
+def test_worker_retries_json_of_the_wrong_shape(tmp_path, monkeypatch):
+    from audio_notes.text_worker import process
+
+    replies = iter(["[]", '{"terms": ["预算"]}'])
+    fake_mlx(monkeypatch, lambda prompt: next(replies))
+    process(
+        {
+            "mode": "retrieval",
+            "retrieval_mode": "expand",
+            "work": str(tmp_path),
+            "units": [{"id": 1, "segment": 1, "text": "预算"}],
+            "model_dir": "unused",
+            "settings": WORKER_SETTINGS,
+            "generation": {**module.GENERATION, "analysis_thinking": False},
+            "instruction": "扩展检索词",
+            "question": "预算",
+            "sources": [],
+        }
+    )
+    assert json.loads((tmp_path / "answer.json").read_text())["terms"] == ["预算"]
+    assert (tmp_path / "answer.rejected-0.json").is_file()
+
+
+def test_invalid_reused_body_is_regenerated(tmp_path, monkeypatch):
+    from audio_notes.text_worker import process
+
+    text = "第一段只是提议，尚未决定，下周再讨论。"
+    fake_mlx(
+        monkeypatch,
+        lambda prompt: prompt.split("\n", 1)[1]
+        if prompt.startswith(module.POLISH)
+        else json.dumps(analysis([1]), ensure_ascii=False),
+    )
+    process(
+        {
+            "work": str(tmp_path),
+            "units": [{"id": 1, "segment": 1, "text": text}],
+            "fingerprint": "test",
+            "model_dir": "unused",
+            "settings": WORKER_SETTINGS,
+            "generation": {**module.GENERATION, "analysis_thinking": False},
+            "reuse_polished": [{"paragraphs": [], "corrections": [], "uncertainties": []}],
+        }
+    )
+    result = json.loads((tmp_path / "result.json").read_text())
+    assert result["polished"][0]["paragraphs"] == [{"unit_ids": [1], "text": text}]

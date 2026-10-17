@@ -78,7 +78,16 @@ const callbacks = {
   onError(tabId, error) {
     log.warn(`tab=${tabId} 错误: ${error.code} ${error.message}`);
     reportState(tabId, S.ERROR, { error });
+    const rec = recorders.get(tabId);
+    if (rec && !rec.finalizing) {
+      // 分块写入失败或录制器出错时，捕获可能仍在进行。只从表里删掉会让它变成孤儿：
+      // 标签页一直被占用、无法停止。改为走正常停止，释放捕获并保存已落盘的分块。
+      void rec.stop('error');
+      return;
+    }
     recorders.delete(tabId);
+    sessionInfo.delete(tabId);
+    lastProgressReport.delete(tabId);
   },
 
   /**
@@ -223,6 +232,7 @@ async function handleMessage(message) {
       const rec = recorders.get(message.tabId);
       if (rec) {
         rec.finalizing = true; // 阻止它走保存流程
+        rec.clearTrackPoll();
         rec.cleanupStream();
         recorders.delete(message.tabId);
       }
@@ -238,9 +248,11 @@ async function handleMessage(message) {
       return { ok: true, sessions: await store.listRecoverable() };
 
     case OFF.RECOVER_SAVE:
+      if (isLive(message.sessionId, message.tabId)) return LIVE_SESSION;
       return await recoverSave(message.sessionId, message.tabId);
 
     case OFF.RECOVER_DISCARD:
+      if (isLive(message.sessionId, message.tabId)) return LIVE_SESSION;
       await store.discard(message.sessionId, message.tabId);
       return { ok: true };
 
@@ -296,6 +308,21 @@ async function startOne(message) {
   });
 
   return { ok: true };
+}
+
+const LIVE_SESSION = {
+  ok: false,
+  error: { code: E.TAB_BUSY, message: '该录音仍在录制或保存中，请在停止后再处理' },
+};
+
+/**
+ * 这段 IDB 录音是否属于本文档里仍在录制或收尾的录制器。
+ * 恢复操作只针对真正中断的录音；对进行中的会话保存或丢弃都会删掉它的已录分块。
+ * @param {string} sessionId
+ * @param {number} tabId
+ */
+function isLive(sessionId, tabId) {
+  return sessionInfo.get(tabId)?.sessionId === sessionId;
 }
 
 /**

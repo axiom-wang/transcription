@@ -278,6 +278,17 @@ def test_matching_voice_thresholds_and_deletion(app):
     assert not k.all("people") and not k.all("members")
 
 
+def test_suggested_voice_label_fits_long_person_names(app):
+    name = "张" * 40
+    Knowledge(app.config.state).put(
+        "people", "long", {"id": "long", "name": name, "voices": [{"source": "x", "vector": [1.0, 0.0]}]}
+    )
+    d = detail(app.config, app.store, app.test_id)
+    match_voices(app.config, app.test_id, d["audio_hash"], {"speaker_1": [0.7, 0.7]})
+    label = app.store.metadata()[d["audio_hash"]]["speakers"]["speaker_1"]
+    assert label.startswith("可能是 张") and label.endswith("？") and len(label) <= 40
+
+
 def test_review_invalidates_when_text_changes(app):
     path = app.config.output / app.test_id / "raw.json"
     import json
@@ -346,6 +357,20 @@ def test_estimates_learn_local_speed_and_include_queue(config):
     assert items[0]["estimates"]["asr"]["seconds"] == 50
     assert items[1]["estimates"]["asr"]["seconds"] == 100
     assert not items[1]["estimates"]["asr"]["rough"]
+
+
+def test_damaged_audio_has_no_estimate_instead_of_breaking_library(tmp_path, monkeypatch):
+    import av
+
+    from audio_notes.estimates import audio_duration
+
+    def damaged(*args, **kwargs):
+        raise av.error.EOFError(-541478725, "End of file")
+
+    monkeypatch.setattr(av, "open", damaged)
+    path = tmp_path / "half-synced.m4a"
+    path.write_bytes(b"partial")
+    assert audio_duration(path) is None
 
 
 def test_overdue_estimate_never_negative(config):

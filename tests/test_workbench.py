@@ -399,3 +399,16 @@ def test_native_connection_mode_returns_json_without_opening_browser(http, monke
     assert cli.main(["workbench", "--url"]) == 0
     result = json.loads(capsys.readouterr().out)
     assert result["url"] == server.origin and result["token"] == app.token
+
+
+def test_failed_enrichment_request_exposes_specific_error(config, monkeypatch, recording):
+    from audio_notes import cli
+    key = recording[1]["id"]
+    detail = "文稿生成失败：polish-1 两次生成仍未通过检查。原始转写已保留。"
+    atomic_json(config.output / key / "enrichment.status.json", {"status": "failed", "error": detail})
+    store = WorkbenchStore(config.state)
+    request = store.enqueue("enrich", {"job_id": key}, "补齐文稿")
+    monkeypatch.setattr(cli, "main", lambda args: 1)
+    monkeypatch.setenv("AUDIO_NOTES_WORKBENCH_TASK", "1")
+    assert execute_request(config, request["id"]) == 1
+    assert store.requests()[0]["error"] == detail

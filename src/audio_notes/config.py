@@ -199,9 +199,11 @@ def load_config(path: Path) -> Config:
     if markdown["paragraph_gap_seconds"] < 0:
         raise ValueError("paragraph_gap_seconds 必须 >= 0")
     if not isinstance(processing["extensions"], list) or not all(
-        isinstance(x, str) and x for x in processing["extensions"]
+        isinstance(x, str) and x.lower().lstrip(".") for x in processing["extensions"]
     ):
         raise ValueError("extensions 必须是扩展名字符串列表")
+    # "M4A" and ".m4a" mean m4a everywhere: scans, uploads and the backlog compare bare names.
+    processing["extensions"] = [x.lower().lstrip(".") for x in processing["extensions"]]
     if type(voice_memos["enabled"]) is not bool:
         raise ValueError("voice_memos.enabled 必须是 true 或 false")
     if type(analysis["enabled"]) is not bool:

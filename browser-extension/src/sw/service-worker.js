@@ -366,6 +366,18 @@ export async function startMany(tabIds) {
         results.push({ tabId, ok: false, error: { code: E.TAB_BUSY, message: '请等待录音保存和发送完成后再录制' } });
         continue;
       }
+      // 先确认授权信念和标签页仍在，再动这一行：注定失败的启动不能抹掉
+      // 行上已保存的录音（以及它的「在听记中处理」入口）。
+      if (!record.origin) {
+        results.push({ tabId, ok: false, error: { code: E.GRANT_LOST, message: chineseFor(E.GRANT_LOST, '') } });
+        continue;
+      }
+      /** @type {chrome.tabs.Tab | null} */
+      const tab = await chrome.tabs.get(tabId).catch(() => null);
+      if (!tab && typeof record.downloadId === 'number') {
+        results.push({ tabId, ok: false, error: { code: E.TAB_GONE, message: chineseFor(E.TAB_GONE, '') } });
+        continue;
+      }
       if (!registry.setState(tabId, S.STARTING)) {
         results.push({
           tabId, ok: false,
@@ -377,12 +389,8 @@ export async function startMany(tabIds) {
         downloadBlobUrl: undefined, tingji: undefined, tingjiMessage: undefined, filename: undefined });
       await arming.renderBadge(tabId, S.STARTING);
 
-      // 取最新的标题（文件名要用），顺便确认 Tab 还在
-      /** @type {chrome.tabs.Tab} */
-      let tab;
-      try {
-        tab = await chrome.tabs.get(tabId);
-      } catch {
+      // 上面取到的最新标题供文件名使用；取不到说明 Tab 已关闭
+      if (!tab) {
         throw Object.assign(new Error('标签页已关闭'), { code: E.TAB_GONE });
       }
 
@@ -690,7 +698,7 @@ async function handleMessage(message) {
       // offscreen 在启动时发现 IDB 里有未保存的录音。
       // 存进 registry 并镜像到 storage，这样 panel 打开时能看到提示 ——
       // 即使那时 offscreen 已经又被关掉了。
-      const sessions = Array.isArray(message.sessions) ? message.sessions : [];
+      const sessions = withoutLive(Array.isArray(message.sessions) ? message.sessions : []);
       registry.setRecoverable(sessions);
       await registry.flush();
       log.info(`offscreen 报告 ${sessions.length} 段未保存的录音`);
@@ -901,7 +909,7 @@ async function buildSnapshot() {
  */
 async function refreshRecoverable() {
   try {
-    const sessions = (await store.listRecoverable()).map((m) => ({
+    const sessions = withoutLive(await store.listRecoverable()).map((m) => ({
       sessionId: m.sessionId,
       tabId: m.tabId,
       title: m.title,
@@ -920,6 +928,22 @@ async function refreshRecoverable() {
   } catch (err) {
     log.debug('读取可恢复录音失败（不影响主流程）', err);
   }
+}
+
+/**
+ * 去掉仍在录制或收尾中的标签页。
+ *
+ * 录制中的分块在 IDB 里同样是「未保存」状态，但它们不是中断的录音。
+ * 若出现在恢复列表里，用户点「丢弃」或「保存」会删掉已录分块，
+ * 收尾时只剩之后的分块 —— 文件缺少 WebM 头部，无法播放。
+ *
+ * @template {{tabId:number}} T
+ * @param {T[]} sessions
+ * @returns {T[]}
+ */
+function withoutLive(sessions) {
+  const live = new Set(registry.activeTabIds());
+  return sessions.filter((s) => !live.has(s.tabId));
 }
 
 /**
@@ -982,6 +1006,12 @@ tabWatch.install({
   async onTabGone(tabId, reason) {
     const record = registry.get(tabId);
     if (!record) return;
+
+    // 授权活不过标签页：保留下来的行不能再被「全部开始 / 再次录制」选中
+    if (record.origin) {
+      registry.upsert(tabId, { origin: '' });
+      await registry.flush();
+    }
 
     // 正在录制：让 offscreen 收尾保存已录部分。
     // track 的 ended 事件通常会先到（那是主路径），这里是第二重保险。

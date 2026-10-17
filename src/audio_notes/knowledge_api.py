@@ -420,8 +420,9 @@ def match_voices(config, recording, audio_hash, embeddings):
                 "score": score,
             },
         )
+        # The suggestion prefix must not push a valid 40-character name over the limit.
         k.store.rename_speaker(
-            audio_hash, speaker, person["name"] if high else f"可能是 {person['name']}？"
+            audio_hash, speaker, person["name"] if high else f"可能是 {person['name'][:35]}？"
         )
 
 

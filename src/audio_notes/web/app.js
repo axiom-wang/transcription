@@ -205,15 +205,18 @@ async function openDetail(id, tab) {
 }
 function inlineMarkdown(text){
  const tokens=[];
+ const keep=html=>{tokens.push(html);return `\uE000${tokens.length-1}\uE001`;};
+ const restore=html=>html.replace(/\uE000(\d+)\uE001/g,(_,n)=>tokens[+n]||'');
+ // Backslash escapes first: escaped < > * [ ] stay literal text, never markup or a stray "\".
+ text=text.replace(/\\([\\`*_{}\[\]<>#!|~])/g,(_,c)=>keep(escapeHTML(c)));
  text=text.replace(/\[([^\]]+)\]\(([^)]+)\)/g,(_,label,url)=>{
-  let out=escapeHTML(label);const reference=url.match(/^transcript(?:\.simplified)?\.md#(segment|turn)-(\d+)$/);
-  if(reference)out=`<button class="ref-link" data-ref="${reference[2]}" data-ref-kind="${reference[1]}">${escapeHTML(label)}</button>`;
-  else if(['analysis.md','polished.md','notes.md','transcript.simplified.md','transcript.md'].includes(url))out=`<a href="#" data-tab="${url==='analysis.md'?'analysis':url==='polished.md'?'polished':'original'}">${escapeHTML(label)}</a>`;
-  else if(/^https?:\/\//.test(url))out=`<a href="${escapeHTML(url)}" target="_blank" rel="noopener noreferrer">${escapeHTML(label)}</a>`;
-  const key=`\uE000${tokens.length}\uE001`;tokens.push(out);return key;
+  const shown=restore(escapeHTML(label));let out=shown;const reference=url.match(/^transcript(?:\.simplified)?\.md#(segment|turn)-(\d+)$/);
+  if(reference)out=`<button class="ref-link" data-ref="${reference[2]}" data-ref-kind="${reference[1]}">${shown}</button>`;
+  else if(['analysis.md','polished.md','notes.md','transcript.simplified.md','transcript.md'].includes(url))out=`<a href="#" data-tab="${url==='analysis.md'?'analysis':url==='polished.md'?'polished':'original'}">${shown}</a>`;
+  else if(/^https?:\/\//.test(url))out=`<a href="${restore(escapeHTML(url))}" target="_blank" rel="noopener noreferrer">${shown}</a>`;
+  return keep(out);
  });
- let out=escapeHTML(text).replace(/\\([\\`*_{}\[\]<>#!|~])/g,'$1').replace(/\*\*([^*]+)\*\*/g,'<strong>$1</strong>');
- return out.replace(/\uE000(\d+)\uE001/g,(_,n)=>tokens[+n]||'');
+ return restore(escapeHTML(text).replace(/\*\*([^*]+)\*\*/g,'<strong>$1</strong>'));
 }
 function markdown(text){
  text=text.replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n/,'');

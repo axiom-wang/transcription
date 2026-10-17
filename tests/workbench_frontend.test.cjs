@@ -36,6 +36,15 @@ test('markdown escapes HTML, blocks script links, and makes source citations act
  assert.ok(html.includes('data-ref="2"'));
  assert.ok(html.includes('<h2>标题</h2>'));
 });
+test('markdown shows backslash-escaped characters literally',()=>{
+ const f=fixture();
+ const html=f.run(String.raw`markdown("预算 \\>3000，人数 \\<5，\\*\\*不是粗体\\*\\* **粗体** [说话人 1](transcript.simplified.md#turn-2)")`);
+ assert.ok(html.includes('预算 &gt;3000，人数 &lt;5'));
+ assert.ok(html.includes('**不是粗体**'));
+ assert.ok(html.includes('<strong>粗体</strong>'));
+ assert.ok(html.includes('data-ref="2" data-ref-kind="turn">说话人 1</button>'));
+ assert.ok(!html.includes('\\&'));
+});
 test('original transcript search retains timestamps and never renders source as HTML',()=>{
  const f=fixture();
  const html=f.run('segmentsHTML(testItem.segments)');

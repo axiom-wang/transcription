@@ -200,3 +200,54 @@ test('再次点击拓展图标或来源跨源跳转，仍保留录音发送入�
   assert.equal(registry.get(tabId).origin, '');
   assert.equal((await send(UI.SEND_TO_TINGJI, { tabId })).ok, true);
 });
+
+test('来源标签页已关闭时，全部开始不会抹掉已保存录音的发送入口', async () => {
+  const { tabId, downloadId } = await saved();
+  // The worker slept through tabs.onRemoved: only tabs.get knows the tab is gone.
+  registry.upsert(tabId, { origin: 'https://example.com' });
+  const tabsGet = stub.chrome.tabs.get;
+  stub.chrome.tabs.get = async (id) => {
+    if (id === tabId) throw new Error(`No tab with id: ${id}.`);
+    return tabsGet(id);
+  };
+  try {
+    await send(UI.START_ALL);
+    await send(UI.START, { tabIds: [tabId] });
+  } finally {
+    stub.chrome.tabs.get = tabsGet;
+  }
+  assert.equal(registry.get(tabId).state, 'done');
+  assert.equal(registry.get(tabId).downloadId, downloadId);
+  assert.equal((await send(UI.SEND_TO_TINGJI, { tabId })).ok, true);
+  await Promise.all(stub.fire('tabs.onRemoved', tabId));
+  assert.equal(registry.get(tabId).origin, '');
+  assert.equal(registry.armedTabIds().includes(tabId), false);
+  assert.equal(registry.get(tabId).downloadId, downloadId);
+});
+
+test('授权已失效的已保存录音不参与全部开始，单独开始也不清掉录音', async () => {
+  const { tabId, downloadId } = await saved();
+  registry.upsert(tabId, { origin: 'https://example.com' });
+  await Promise.all(stub.fire('tabs.onUpdated', tabId, { url: 'https://other.example/' }, {}));
+  assert.equal(registry.armedTabIds().includes(tabId), false);
+  const reply = await send(UI.START, { tabIds: [tabId] });
+  assert.equal(reply.results[0].ok, false);
+  assert.equal(reply.results[0].error.code, 'E_GRANT_LOST');
+  assert.equal(registry.get(tabId).state, 'done');
+  assert.equal(registry.get(tabId).downloadId, downloadId);
+});
+
+test('正在录制的标签页不会出现在「未保存的录音」恢复列表里', async () => {
+  const store = await import('../src/common/chunk-store.js');
+  const live = nextId++;
+  const crashed = nextId++;
+  for (const tabId of [live, crashed]) {
+    await store.begin({ sessionId: `s-${tabId}`, tabId, sessionStamp: 'stamp', title: '录音',
+      url: 'https://example.com/', index: 1, startedAt: Date.now(), mimeType: 'audio/webm' });
+    await store.append(`s-${tabId}`, tabId, 0, new Blob(['header']));
+  }
+  registry.upsert(live, { state: 'recording', origin: 'https://example.com' });
+  const listed = (await send(UI.GET_SNAPSHOT)).snapshot.recoverable.map((r) => r.tabId);
+  assert.equal(listed.includes(live), false);
+  assert.equal(listed.includes(crashed), true);
+});

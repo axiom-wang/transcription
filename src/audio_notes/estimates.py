@@ -28,7 +28,9 @@ def _duration(path, size, modified):
                 return float(audio.duration / av.time_base)
             stream = audio.streams.audio[0]
             return float(stream.duration * stream.time_base) if stream.duration else None
-    except (OSError, ValueError, IndexError):
+    except Exception:
+        # Best-effort probe. PyAV also raises EOFError/LookupError subclasses for damaged or
+        # half-synced files; one such file must not break the whole library listing.
         return None
 
 

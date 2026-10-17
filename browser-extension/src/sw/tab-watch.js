@@ -143,6 +143,7 @@ export async function reconcileTabs() {
   const gone = [];
   /** @type {number[]} */
   const grantLost = [];
+  let closedWithRecording = 0;
 
   for (const record of registry.all()) {
     /** @type {chrome.tabs.Tab | null} */
@@ -154,7 +155,12 @@ export async function reconcileTabs() {
     }
 
     if (!tab && typeof record.downloadId === 'number') {
-      continue; // Keep saved recordings available after the source tab closes.
+      // Keep saved recordings available after the source tab closes; only its grant is gone.
+      if (record.origin) {
+        registry.upsert(record.tabId, { origin: '' });
+        closedWithRecording += 1;
+      }
+      continue;
     }
     if (!tab) {
       gone.push(record.tabId);
@@ -188,7 +194,7 @@ export async function reconcileTabs() {
     await renderBadge(tabId, S.IDLE);
   }
 
-  if (gone.length > 0 || grantLost.length > 0) {
+  if (gone.length > 0 || grantLost.length > 0 || closedWithRecording > 0) {
     log.info(`对账：${gone.length} 个 Tab 已消失，${grantLost.length} 个授权失效`);
     await registry.flush();
   }

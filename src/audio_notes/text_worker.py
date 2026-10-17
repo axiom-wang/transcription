@@ -26,6 +26,10 @@ from .enrichment import (
 )
 from .files import atomic_json
 
+# Valid JSON of the wrong shape (an array, or strings where objects belong) makes
+# validators raise AttributeError; it is still a rejected generation to retry.
+INVALID_OUTPUT = (ValueError, KeyError, TypeError, AttributeError)
+
 
 def process(request):
     os.environ.update(
@@ -67,12 +71,23 @@ def process(request):
 
     def generate_json(name, instruction, payload, validator, plain=False):
         path = work / f"{name}.json"
+        # Diarization can isolate a syllable or a brief acknowledgement. Preserve
+        # these verbatim rather than asking the model to invent missing context.
+        if plain and len("".join(u["text"] for u in payload).strip()) <= 12:
+            result = {
+                "paragraphs": [{"unit_ids": [u["id"]], "text": u["text"]} for u in payload],
+                "corrections": [],
+                "uncertainties": [],
+            }
+            validator(result)
+            atomic_json(path, result)
+            return result
         if path.is_file():
             try:
                 cached = json.loads(path.read_text())
                 validator(cached)
                 return cached
-            except (ValueError, KeyError, TypeError):
+            except INVALID_OUTPUT:
                 path.rename(work / f"{name}.invalid-{time.time_ns()}.json")
         if not plain:
             for rejected in sorted(work.glob(f"{name}.rejected-*.json"), reverse=True):
@@ -84,7 +99,7 @@ def process(request):
                     validator(recovered)
                     atomic_json(path, recovered)
                     return recovered
-                except (ValueError, KeyError, TypeError):
+                except INVALID_OUTPUT:
                     continue
         import mlx.core as mx
         from mlx_lm import stream_generate
@@ -209,7 +224,7 @@ def process(request):
                 )
                 mx.clear_cache()
                 return result
-            except (ValueError, KeyError, TypeError) as exc:
+            except INVALID_OUTPUT as exc:
                 error = str(exc)
                 # Private generated content stays in the recording's local work directory.
                 atomic_json(
@@ -335,9 +350,11 @@ def process(request):
     for i, chunk in enumerate(polish_chunks):
         reusable = request.get('reuse_polished')
         if isinstance(reusable, list) and len(reusable) == len(polish_chunks):
-            validate_polish(reusable[i], chunk)
-            polished.append(reusable[i])
-            continue
+            try:
+                polished.append(validate_polish(reusable[i], chunk))
+                continue
+            except INVALID_OUTPUT:
+                pass  # A reused body that no longer validates is regenerated, not fatal.
         report("整理文稿", completed=i, total=len(polish_chunks), unit="段")
         polished.append(
             generate_json(
@@ -396,9 +413,16 @@ def process(request):
 
 
 def main():
+    request = None
     try:
-        process(json.loads(Path(sys.argv[1]).read_text()))
-    except Exception:
+        request = json.loads(Path(sys.argv[1]).read_text())
+        process(request)
+    except Exception as exc:
+        if request is not None:
+            try:
+                atomic_json(Path(request["work"]) / "worker-error.json", {"error": str(exc)})
+            except (OSError, KeyError):
+                pass
         traceback.print_exc()
         return 1
     return 0

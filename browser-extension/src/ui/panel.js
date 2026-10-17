@@ -135,8 +135,9 @@ function render() {
 
   const recording = rows.filter((r) => isActiveState(r.state));
   const armed = rows.filter((r) => r.state === S.ARMED);
+  // 与 SW 的 armedTabIds 一致：origin 为空表示授权已失效，「全部开始」不会选中它
   const startable = rows.filter(
-    (r) => r.state === S.ARMED || r.state === S.DONE || r.state === S.ERROR,
+    (r) => r.origin && (r.state === S.ARMED || r.state === S.DONE || r.state === S.ERROR),
   );
 
   // 汇总与状态点
@@ -385,7 +386,8 @@ function buildActions(row) {
         status.setAttribute('role', 'status');
         out.push(status);
       }
-      add(T.actionRecordAgain, '', () => startTabs([row.tabId]));
+      // 授权已失效（跨源跳转或标签页已关闭）时不给「再次录制」：它只会失败
+      if (row.origin) add(T.actionRecordAgain, '', () => startTabs([row.tabId]));
       add(T.actionRemove, 'btn-ghost', () => disarm(row.tabId));
       break;
     }

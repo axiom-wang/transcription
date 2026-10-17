@@ -99,6 +99,16 @@ def test_config_unknown_and_bad_model(tmp_path):
         load_config(path)
 
 
+def test_config_extensions_are_normalized(tmp_path):
+    text = (Path(__file__).resolve().parents[1] / "config.toml").read_text()
+    path = tmp_path / "config.toml"
+    path.write_text(re.sub(r"(?m)^extensions = .*$", 'extensions = ["M4A", ".wav"]', text))
+    assert load_config(path).processing["extensions"] == ["m4a", "wav"]
+    path.write_text(re.sub(r"(?m)^extensions = .*$", 'extensions = ["."]', text))
+    with pytest.raises(ValueError, match="extensions"):
+        load_config(path)
+
+
 def test_render_zero_segments_and_markdown_escaping(config):
     raw = {
         "source": {"name": "会议 [测试]", "path": str(config.inbox / "会议 [测试].m4a")},

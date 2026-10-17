@@ -136,7 +136,7 @@ def execute_request(config, key):
                         "macOS 拒绝听记读取语音备忘录目录。请在「系统设置 → 隐私与安全性 → "
                         "完全磁盘访问权限」中允许「听记」，退出并重新打开听记后再扫描。"
                     )
-            if not code and request["kind"] == "enrich":
+            if request["kind"] == "enrich":
                 marker = read_json(config.output / payload["job_id"] / "enrichment.status.json")
                 if marker.get("status") != "completed":
                     code = 1
