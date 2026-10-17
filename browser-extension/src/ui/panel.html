@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>听记 · 标签页录音</title>
+  <link rel="stylesheet" href="panel.css">
+</head>
+<body>
+  <!--
+    这个页面同时作为侧边栏和可独立打开的标签页使用。
+    成本几乎为零，但换来两点好处：侧边栏相关 API 若出意外仍有退路，
+    且「把面板放在自己的标签页里」在长时间录制时确实好用。
+  -->
+  <header class="bar">
+    <div class="bar-title">
+      <span class="dot" id="statusDot" aria-hidden="true"></span>
+      <span id="summary">载入中…</span>
+    </div>
+    <div class="bar-actions">
+      <button id="startAll" class="btn btn-primary" hidden>开始录制</button>
+      <button id="stopAll" class="btn btn-danger" hidden>全部停止</button>
+    </div>
+  </header>
+
+  <!-- 恢复提示：仅在 IDB 里发现未保存录音时出现 -->
+  <section id="recoverBanner" class="banner banner-warn" hidden>
+    <div class="banner-head">
+      <strong id="recoverTitle"></strong>
+      <div class="banner-btns">
+        <button id="recoverSaveAll" class="btn btn-small btn-primary">全部保存</button>
+        <button id="recoverDiscardAll" class="btn btn-small btn-ghost">全部丢弃</button>
+      </div>
+    </div>
+    <p id="recoverBody" class="banner-body"></p>
+  </section>
+
+  <!-- 一次性说明条：教会「为什么要逐个授权」这个反直觉的约束 -->
+  <section id="explainer" class="banner banner-info" hidden>
+    <div class="banner-head">
+      <strong id="explainerTitle"></strong>
+      <button id="explainerClose" class="btn btn-small btn-ghost">知道了，不再提示</button>
+    </div>
+    <p id="explainerBody" class="banner-body"></p>
+  </section>
+
+  <p id="warnMany" class="warn-line" hidden></p>
+
+  <!--
+    全局回放开关。默认静默录制，所以这里必须把「听不到是故意的、文件是完整的」
+    说清楚 —— 否则用户开录后发现没声音，第一反应是扩展坏了。
+  -->
+  <section class="monitor-bar">
+    <label class="monitor-toggle">
+      <input type="checkbox" id="monitorAll">
+      <span id="monitorLabel"></span>
+    </label>
+    <p id="monitorHint" class="monitor-hint"></p>
+  </section>
+
+  <section class="monitor-bar tingji-settings" aria-label="听记连接设置">
+    <label class="monitor-toggle">
+      <input type="checkbox" id="autoTingji">
+      <span>停止后自动送入听记</span>
+    </label>
+    <p class="monitor-hint">录音保存完成后，在本机排队转写。默认关闭。</p>
+    <p id="connectorStatus" class="monitor-hint" role="status">正在检测听记连接器…</p>
+    <button id="openTingji" class="btn btn-small btn-ghost">打开听记</button>
+  </section>
+
+  <main>
+    <ul id="list" class="rows"></ul>
+    <div id="empty" class="empty" hidden>
+      <p class="empty-title"></p>
+      <p class="empty-hint"></p>
+    </div>
+  </main>
+
+  <footer class="foot">
+    <span id="shortcutHint"></span>
+  </footer>
+
+  <script type="module" src="panel.js"></script>
+</body>
+</html>

@@ -1,0 +1,11 @@
+{
+  "name": "tingji-tab-audio-recorder",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "听记 · 标签页录音（仅连接本机听记，无运行时依赖）",
+  "scripts": {
+    "test": "node --test \"tests/*.test.js\"",
+    "fixture": "ffmpeg -y -f lavfi -i \"sine=frequency=440:duration=2\" -c:a libopus -f webm tests/fixtures/tone-2s.webm"
+  }
+}

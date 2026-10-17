@@ -30,7 +30,7 @@ initial_prompt = "" # 可填专有名词，但不要填推测的会议内容。
 
 [processing]
 recursive = true
-extensions = ["m4a", "qta", "mp3", "wav", "mov", "mp4", "aac", "aiff", "aif", "caf", "flac"]
+extensions = ["m4a", "qta", "mp3", "wav", "mov", "mp4", "mkv", "webm", "aac", "aiff", "aif", "caf", "flac"]
 settle_seconds = 30 # 最后修改后等待，避免读取正在同步的文件。
 poll_seconds = 10 # 手动扫描等待同步文件时、以及可选的 watch 模式的检查间隔。
 retry_seconds = 300 # 仅 watch 模式的失败重试间隔；手动扫描每次都重试失败任务。

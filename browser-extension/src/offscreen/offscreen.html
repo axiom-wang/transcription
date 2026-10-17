@@ -1,0 +1,18 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <title>录制上下文</title>
+</head>
+<body>
+  <!--
+    这个文档对用户不可见，但它是**整个扩展里最重要的上下文**：
+    它持有所有 MediaStream、MediaRecorder 和 AudioContext。
+
+    service worker 随时会被杀，而这个文档在 reasons:['USER_MEDIA'] 下
+    不设生命周期上限，会一直活着 —— 所以它是权威状态所有者。
+    对账时（OFFSCREEN_PING）以它的回复为准。
+  -->
+  <script type="module" src="offscreen.js"></script>
+</body>
+</html>

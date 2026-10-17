@@ -14,3 +14,5 @@ state/
 models/
 verification/
 config.local.toml
+
+/developer/native-host.sh

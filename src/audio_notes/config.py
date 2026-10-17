@@ -101,7 +101,7 @@ def load_config(path: Path) -> Config:
     }
     processing = {
         "recursive": True,
-        "extensions": ["m4a", "qta", "mp3", "wav", "mov", "mp4"],
+        "extensions": ["m4a", "qta", "mp3", "wav", "mov", "mp4", "mkv", "webm"],
         "settle_seconds": 30,
         "poll_seconds": 10,
         "retry_seconds": 300,

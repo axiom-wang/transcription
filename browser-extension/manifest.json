@@ -1,0 +1,48 @@
+{
+  "manifest_version": 3,
+  "name": "听记 · 标签页录音",
+  "version": "0.1.0",
+  "description": "独立录制多个标签页的音频，保存后可一键送入本机听记，完成转写、文稿优化和说话人区分。",
+  "minimum_chrome_version": "116",
+  "permissions": [
+    "tabCapture",
+    "offscreen",
+    "downloads",
+    "tabs",
+    "storage",
+    "contextMenus",
+    "sidePanel",
+    "nativeMessaging"
+  ],
+  "background": {
+    "service_worker": "src/sw/service-worker.js",
+    "type": "module"
+  },
+  "action": {
+    "default_title": "授权当前标签页并打开录制面板"
+  },
+  "side_panel": {
+    "default_path": "src/ui/panel.html"
+  },
+  "commands": {
+    "arm-current-tab": {
+      "suggested_key": {
+        "default": "Alt+Shift+R"
+      },
+      "description": "授权当前标签页（加入录制列表）"
+    },
+    "toggle-record-all": {
+      "suggested_key": {
+        "default": "Alt+Shift+S"
+      },
+      "description": "开始 / 停止录制全部已授权标签页"
+    }
+  },
+  "icons": {
+    "16": "icons/16.png",
+    "32": "icons/32.png",
+    "48": "icons/48.png",
+    "128": "icons/128.png"
+  },
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAl7wU5yCeFA6mmT4xiv5hw51JZoG2YhajtS/zI/lFs3smNTNDu10K3LdNjcdGc6dMykVIgC3ympi5hwRyj2g0fMkeEsCSvMguu3UdPp7rkGRjtdqiva5tqtrrrzIVoJPiGv0nPpyWuRDNNpLy6sF9cLxJ7tmlLEyKfxI8nOBqJYKahqf+vzbvd8YvB5IfgJosbDn+6yqw4LbAvM76CiLVVIlAWXNypLATe2QZTgABIL0xmrDTBKQr1FUFCYHg/ZwxjlQrshV7GD3BI6nJefBuJE0FTlj2qTeOXwcj+nHFVX3Il5c8l19p46S7Vi2PeoQy+kcbyvuxliqGVuTsnBClIQIDAQAB"
+}

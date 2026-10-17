@@ -162,9 +162,14 @@ def main(argv=None):
     workbench_mode.add_argument("--open", action="store_true", help="后台启动并在浏览器打开工作台")
     workbench_mode.add_argument("--url", action="store_true", help="后台启动并返回本机应用连接信息")
     workbench_command.add_argument("--port", type=int, default=8765)
+    commands.add_parser("native-host", help=argparse.SUPPRESS)
     task_command = commands.add_parser("workbench-task", help=argparse.SUPPRESS)
     task_command.add_argument("request_id")
     args = parser.parse_args(argv)
+    if args.command == "native-host":
+        from .native_host import run
+
+        return run(config_path=args.config)
     try:
         config = load_config(args.config)
         config.ensure_dirs()
