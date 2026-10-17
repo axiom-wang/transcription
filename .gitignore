@@ -16,3 +16,44 @@ verification/
 config.local.toml
 
 /developer/native-host.sh
+
+# Local planning documents and user recordings (keep product test fixtures).
+/docs/
+*.m4a
+*.qta
+*.mp3
+*.wav
+*.mov
+*.mp4
+*.mkv
+*.webm
+*.aac
+*.aiff
+*.aif
+*.caf
+*.flac
+*.ogg
+*.opus
+!tests/fixtures/**
+!browser-extension/tests/fixtures/**
+
+# Generated transcripts and recording metadata, including exported copies.
+transcript*.md
+transcript*.txt
+*.srt
+*.vtt
+notes.md
+polished.md
+polished.txt
+analysis.md
+raw.json
+raw.invalid-*.json
+speakers.json
+speakers.status.json
+enrichment.complete.json
+enrichment.status.json
+title.json
+title.status.json
+*.origin.json
+*.sqlite3
+*.sqlite3-*
