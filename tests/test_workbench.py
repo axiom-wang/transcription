@@ -6,6 +6,7 @@ import threading
 import time
 import wave
 import zipfile
+from dataclasses import replace
 from http.client import HTTPConnection
 from pathlib import Path
 from urllib.parse import quote
@@ -412,3 +413,100 @@ def test_failed_enrichment_request_exposes_specific_error(config, monkeypatch, r
     monkeypatch.setenv("AUDIO_NOTES_WORKBENCH_TASK", "1")
     assert execute_request(config, request["id"]) == 1
     assert store.requests()[0]["error"] == detail
+
+
+def test_on_demand_status_hides_retired_automatic_failures(config, recording):
+    key = recording[1]["id"]
+    config = replace(config, analysis={**config.analysis, "enabled": True, "automatic": False})
+    store = WorkbenchStore(config.state)
+    status = lambda: library(config, store)[0]["text_status"]  # noqa: E731
+    path = config.output / key / "enrichment.status.json"
+    assert status() == "disabled"
+    atomic_json(path, {"status": "failed", "error": "旧的自动运行失败"})
+    assert status() == "disabled"
+    atomic_json(path, {"status": "failed", "error": "这次请求失败", "requested": True})
+    assert status() == "failed"
+    automatic = replace(config, analysis={**config.analysis, "automatic": True})
+    atomic_json(path, {"status": "failed", "error": "自动运行失败"})
+    assert library(automatic, store)[0]["text_status"] == "failed"
+
+
+def test_diarize_request_only_refreshes_documents_that_already_exist(config, monkeypatch, recording):
+    from audio_notes import cli
+
+    key = recording[1]["id"]
+    config = replace(config, analysis={**config.analysis, "enabled": True, "automatic": False})
+    atomic_json(config.output / key / "speakers.status.json", {"status": "completed"})
+    store = WorkbenchStore(config.state)
+    calls = []
+    monkeypatch.setattr(cli, "main", lambda args: calls.append(args[2]) or 0)
+    monkeypatch.setenv("AUDIO_NOTES_WORKBENCH_TASK", "1")
+    request = store.enqueue("diarize", {"job_id": key}, "补做")
+    assert execute_request(config, request["id"]) == 0
+    assert calls == ["diarize"]
+    atomic_json(config.output / key / "enrichment.complete.json", {"fingerprint": "a" * 64})
+    request = store.enqueue("diarize", {"job_id": key}, "补做")
+    assert execute_request(config, request["id"]) == 0
+    assert calls == ["diarize", "diarize", "enrich"]
+
+
+def test_transcribe_task_ignores_a_retired_automatic_failure(config, monkeypatch, recording):
+    from audio_notes import cli
+
+    key = recording[1]["id"]
+    config = replace(config, analysis={**config.analysis, "enabled": True, "automatic": False})
+    marker = config.output / key / "enrichment.status.json"
+    atomic_json(marker, {"status": "failed", "error": "旧的自动运行失败"})
+    store = WorkbenchStore(config.state)
+    paths = {"paths": [recording[1]["source"]]}
+    monkeypatch.setattr(cli, "main", lambda args: 0)
+    monkeypatch.setenv("AUDIO_NOTES_WORKBENCH_TASK", "1")
+    assert execute_request(config, store.enqueue("transcribe", paths, "转写")["id"]) == 0
+    assert library(config, store)[0]["text_error"] is None
+    atomic_json(marker, {"status": "failed", "error": "这次请求失败", "requested": True})
+    assert execute_request(config, store.enqueue("transcribe", paths, "转写")["id"]) == 1
+    assert library(config, store)[0]["text_error"] == "这次请求失败"
+
+
+def test_requested_document_shows_as_waiting_with_a_time(config, recording):
+    from audio_notes.estimates import estimates
+    from audio_notes.workbench_library import detail
+
+    key = recording[1]["id"]
+    config = replace(config, analysis={**config.analysis, "enabled": True, "automatic": False})
+    store = WorkbenchStore(config.state)
+    item = lambda: library(config, store)[0]  # noqa: E731
+    assert item()["text_status"] == "disabled"
+    request = store.enqueue("enrich", {"job_id": key}, "生成智能稿")
+    assert item()["text_status"] == "pending"
+    assert detail(config, store, key)["text_status"] == "pending"
+    items = library(config, store)
+    requests = store.requests()
+    estimates(config, items, requests)
+    assert items[0]["estimates"]["text"]["seconds"] > 0
+    assert requests[0]["estimates"]["text"]["seconds"] > 0
+    store.request_action(request["id"], "cancel")
+    assert item()["text_status"] == "disabled"
+
+
+def test_queued_and_running_polish_are_reported_on_a_delivered_document(config, recording):
+    from audio_notes.estimates import estimates
+
+    key = recording[1]["id"]
+    config = replace(config, analysis={**config.analysis, "enabled": True, "automatic": False})
+    directory = config.output / key
+    for name in ("polished.md", "polished.txt", "analysis.md"):
+        (directory / name).write_text("文稿")
+    atomic_json(directory / "enrichment.complete.json", {"fingerprint": "a" * 64})
+    store = WorkbenchStore(config.state)
+    assert library(config, store)[0]["text_status"] == "completed"
+    request = store.enqueue("polish", {"job_id": key}, "润色正文")
+    items, requests = library(config, store), store.requests()
+    assert items[0]["text_status"] == "pending" and items[0]["text_available"]
+    estimates(config, items, requests)
+    assert not requests[0]["estimates"]["text"]["ready"]
+    assert store.claim(request["id"])
+    with run_lock(config.state / "text-processing"):
+        assert library(config, store)[0]["text_status"] == "running"
+    store.finish(request["id"], "completed")
+    assert library(config, store)[0]["text_status"] == "completed"

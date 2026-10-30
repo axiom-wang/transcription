@@ -1,5 +1,7 @@
+import json
 from copy import deepcopy
 from dataclasses import replace
+from pathlib import Path
 
 import pytest
 
@@ -335,3 +337,78 @@ def test_interval_index_matches_overlaps_with_nested_turns():
             t for t in index.overlapping(start, end) if t["start"] < end and t["end"] > start
         ]
         assert selected == expected
+
+
+def test_small_tail_overrun_is_trimmed_and_large_overrun_stays_invalid():
+    from audio_notes.diarization import trim_tail
+
+    # Taken from a real recording: the last window ran 0.33 s past the reported duration.
+    trimmed = trim_tail([turn(0, 5), turn(9, 10.33)], 10)
+    assert validate_turns(trimmed, 10, True)[-1] == turn(9, 10)
+    assert trim_tail([turn(0, 5), turn(10.1, 10.5)], 10) == [turn(0, 5)]
+    assert trim_tail("坏数据", 10) == "坏数据"
+    with pytest.raises(ValueError):
+        validate_turns(trim_tail([turn(0, 13)], 10), 10)
+
+
+def test_overrunning_model_output_still_publishes_speakers(config):
+    job, raw, directory = fixture_job(config)
+    duration = raw["info"]["duration"]
+
+    def overrunning(config, request, log):
+        known_worker(config, request, log)
+        path = Path(request["result_path"])
+        data = json.loads(path.read_text())
+        for key in ("turns", "exclusive_turns"):
+            data[key][-1]["end"] = duration + 0.33
+        atomic_json(path, data)
+
+    assert diarize_one(config, job, {"model": "test"}, worker=overrunning)
+    stored = json.loads((directory / "speakers.json").read_text())
+    assert stored["turns"][-1]["end"] == duration
+    assert stored["exclusive_turns"][-1]["end"] == duration
+
+
+def test_failed_speaker_stage_waits_for_retry_phase_and_stops_at_the_cap(config, monkeypatch):
+    config = replace(config, speakers={**config.speakers, "enabled": True})
+    job, raw, directory = fixture_job(config)
+    monkeypatch.setattr("audio_notes.diarization.check_speaker_model", lambda c: {})
+    status_path = directory / "speakers.status.json"
+    calls = []
+
+    def fails(*args):
+        calls.append(1)
+        raise RuntimeError("synthetic failure")
+
+    def age():
+        status = json.loads(status_path.read_text())
+        atomic_json(status_path, {**status, "updated": status["updated"] - 10**7})
+
+    assert diarize_completed(config, [job], worker=fails, phase="new") == 0
+    age()
+    assert diarize_completed(config, [job], worker=fails, phase="new") == 0
+    assert len(calls) == 1
+    for _ in range(8):
+        age()
+        diarize_completed(config, [job], worker=fails, phase="retry")
+    status = json.loads(status_path.read_text())
+    assert len(calls) == 5 and status["attempts"] == 5 and "手动重试" in status["error"]
+    assert diarize_completed(config, [job], worker=known_worker, retry_now=True) == 1
+
+
+def test_retry_phase_shares_the_allowance_of_the_new_phase(config, monkeypatch):
+    from audio_notes import diarization
+
+    config = replace(config, speakers={**config.speakers, "enabled": True})
+    monkeypatch.setattr(diarization, "check_speaker_model", lambda config: {})
+    monkeypatch.setattr(diarization, "diarize_one", lambda *a, **k: calls.append(a[1]) or True)
+    monkeypatch.setattr("audio_notes.pipeline.write_exports", lambda *a: None)
+    monkeypatch.setattr("audio_notes.txt_exports.publish_txt", lambda *a: None)
+    job, _, _ = fixture_job(config)
+    calls, started = [], []
+    for phase in ("new", "retry"):
+        diarize_completed(config, [job], limit=0, phase=phase, started=started)
+    assert calls == []
+    diarize_completed(config, [job], limit=1, phase="new", started=started)
+    diarize_completed(config, [job], limit=1, phase="retry", started=started)
+    assert calls == [job] and started == [job["id"]]

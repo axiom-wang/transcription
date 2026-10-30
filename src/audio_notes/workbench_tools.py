@@ -187,7 +187,7 @@ def agent_context(config, store, key, parts=("transcript",)):
     directory, documents = Path(item["output"]), 0
     for part, name, heading in (
         ("analysis", "analysis.md", "分析稿（模型生成）"),
-        ("polished", "polished.md", "整理稿（模型润色，原意保留）"),
+        ("polished", "polished.md", "整理稿（未润色时为识别原文）"),
     ):
         if part in parts and (directory / name).is_file():
             body = rename_speakers(

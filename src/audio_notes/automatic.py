@@ -83,6 +83,12 @@ class Watcher:
         ]
         if any(r["status"] == "running" for r in active_scans):
             self.reason = "正在扫描；新增变化将在本轮结束后继续处理" if self.dirty else "正在扫描"
+            if self.dirty:
+                # A queued scan also ends the running scan's retry phase early.
+                self.store.enqueue(
+                    "scan", {"automatic": True}, "自动扫描新录音", alongside_running=True
+                )
+                self.dirty = False
             return
         if not self.dirty and not active_scans:
             self.reason = "监听新录音"

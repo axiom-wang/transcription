@@ -157,6 +157,9 @@ def main(argv=None):
     enrich_command.add_argument(
         "--title", action="store_true", help="只重新生成录音名称（一句话简介 + 时间）"
     )
+    enrich_command.add_argument(
+        "--polish", action="store_true", help="用模型润色正文，不改动分析稿"
+    )
     workbench_command = commands.add_parser("workbench", help="本地录音工作台")
     workbench_mode = workbench_command.add_mutually_exclusive_group()
     workbench_mode.add_argument("--open", action="store_true", help="后台启动并在浏览器打开工作台")
@@ -308,6 +311,13 @@ def main(argv=None):
                     named = name_completed(config, jobs)
                     print(f"本次生成 {named} 个录音名称。")
                     return 0 if named == len(jobs) else 1
+                if args.polish:
+                    from .enrichment import polish_completed
+
+                    if not args.jobs:
+                        raise ValueError("请指定要润色的任务标识")
+                    print(f"本次润色 {polish_completed(config, jobs)} 份正文。")
+                    return 0
                 count = enrich_completed(config, jobs, force=args.force, retry_now=True)
                 write_index(config, store.completed())
                 print(f"本次生成 {count} 份转写交付稿和分析稿。")

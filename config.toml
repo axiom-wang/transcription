@@ -47,6 +47,7 @@ section_seconds = 300 # 仅用时间作为章节标题，不推测主题。
 [analysis]
 # Qwen3.5-9B 4bit，独立 MLX 环境；与语音识别串行使用本机模型资源。
 enabled = true
+automatic = false # false：自动流程只生成录音名称，智能稿在听记中按需生成；true：每条录音自动生成。
 chunk_chars = 4000
 max_input_tokens = 16000
 max_output_tokens = 6000

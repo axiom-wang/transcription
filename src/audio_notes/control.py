@@ -8,6 +8,8 @@ from pathlib import Path
 
 from .files import atomic_json
 
+MAX_AUTOMATIC_ATTEMPTS = 5
+
 
 def read_json(path, default=None):
     try:
@@ -48,12 +50,56 @@ def activity(path, stage, **fields):
         )
 
 
+def smart_is_automatic(config):
+    return bool(config.analysis.get("enabled") and config.analysis.get("automatic"))
+
+
+def awaiting_retry(status, key=None):
+    return status.get("status") == "failed" and status.get("fingerprint") == key
+
+
+def failed_attempts(status, key=None):
+    """Consecutive failures on this exact input; older markers without a count mean one."""
+    if status.get("fingerprint") != key:
+        return 0
+    return status.get("attempts", 1 if status.get("status") == "failed" else 0)
+
+
+def retry_due(status, retry_seconds, key=None):
+    """Repeated failures wait 1x, 2x, 4x... the interval, then only a manual retry runs them."""
+    if not awaiting_retry(status, key):
+        return True
+    attempts = failed_attempts(status, key)
+    return (
+        attempts < MAX_AUTOMATIC_ATTEMPTS
+        and time.time() - status.get("updated", 0) >= retry_seconds * 2 ** (attempts - 1)
+    )
+
+
+def failed_status(previous, exc, key=None):
+    attempts = failed_attempts(previous, key) + 1
+    error = str(exc)
+    if attempts >= MAX_AUTOMATIC_ATTEMPTS:
+        error += f"（已连续失败 {attempts} 次，不再自动重试，可手动重试）"
+    return {
+        "status": "failed",
+        "fingerprint": key,
+        "attempts": attempts,
+        "error": error,
+        "updated": time.time(),
+    }
+
+
 def yield_to_workbench(config):
     """Automatic scans yield between files to explicitly queued user work."""
     if paused(config):
         return True
     if os.environ.get("AUDIO_NOTES_WORKBENCH_TASK"):
         return False
+    return queued_work(config)
+
+
+def queued_work(config):
     path = config.state / "workbench.sqlite3"
     if not path.is_file() or not lock_busy(config.state / "workbench-server" / "run.lock"):
         return False

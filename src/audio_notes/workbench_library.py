@@ -1,11 +1,12 @@
 """Read-only projections of recordings, generated artifacts and current activity."""
 
+import json
 import re
 import sqlite3
 from functools import lru_cache
 from pathlib import Path
 
-from .control import lock_busy, read_json
+from .control import lock_busy, read_json, smart_is_automatic
 from .files import sha256_file
 
 ARTIFACTS = {
@@ -84,7 +85,18 @@ def audio_path(config, key):
     raise FileNotFoundError("原音频已移动或不可访问；转写文稿仍可阅读")
 
 
-def summarize(config, entry, metadata, busy):
+def document_requests(store):
+    """Unfinished document requests by recording; stage markers only appear once they start."""
+    found = {}
+    for request in store.requests():
+        if request["kind"] in ("enrich", "polish") and request["status"] in ("queued", "running"):
+            key = json.loads(request["payload"]).get("job_id")
+            if key not in found or request["status"] == "running":
+                found[key] = request
+    return found
+
+
+def summarize(config, entry, metadata, busy, documents):
     directory = Path(entry["output"])
     if directory.resolve().parent != config.output.resolve():
         return None
@@ -137,6 +149,19 @@ def summarize(config, entry, metadata, busy):
         text_status = "completed"
     if text_status == "completed" and not complete:
         text_status = "pending"
+    # Without automatic generation, only an explicit request can leave work pending or failed.
+    if (
+        config.analysis.get("enabled")
+        and not smart_is_automatic(config)
+        and not text.get("requested")
+        and text_status in ("pending", "failed", "interrupted")
+    ):
+        text_status = "completed" if complete else "disabled"
+    document = documents.get(entry["id"])
+    if document and text_status != "running":
+        # Polishing writes no stage marker: it must not disturb a delivered document's status.
+        polishing = document["kind"] == "polish" and document["status"] == "running"
+        text_status = "running" if polishing and busy["text"] else "pending"
     if (
         asr_status == "completed"
         and "transcript.simplified.md" not in available
@@ -187,7 +212,7 @@ def summarize(config, entry, metadata, busy):
         "speaker_status": speaker_status,
         "speaker_error": speaker.get("error"),
         "asr_error": entry.get("error"),
-        "text_error": text.get("error"),
+        "text_error": text.get("error") if text_status in ("failed", "interrupted") else None,
         "available": available,
         "text_available": complete,
         "text_generated_at": receipt.get("created_at"),
@@ -207,9 +232,10 @@ def library(config, store):
         "asr": lock_busy(config.state / "run.lock"),
         "text": lock_busy(config.state / "text-processing" / "run.lock"),
     }
+    documents = document_requests(store)
     groups = {}
     for entry in rows(config):
-        item = summarize(config, entry, metadata, busy)
+        item = summarize(config, entry, metadata, busy, documents)
         if item is None:
             continue
         key = item["audio_hash"]
@@ -232,6 +258,7 @@ def detail(config, store, key):
             "asr": lock_busy(config.state / "run.lock"),
             "text": lock_busy(config.state / "text-processing" / "run.lock"),
         },
+        document_requests(store),
     )
     raw = read_json(Path(entry["output"]) / "raw.json")
     from .diarization import rename_speakers, speaker_label, speaker_view

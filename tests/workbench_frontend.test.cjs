@@ -78,6 +78,22 @@ test('completed document renders locally with source reference links',async()=>{
  assert.ok(f.element('#document').innerHTML.includes('整理后的内容'));
  assert.ok(f.element('#document').innerHTML.includes('data-ref="1"'));
 });
+test('only an unpolished source body offers on-demand polishing',()=>{
+ const f=fixture();
+ f.run("state.detail={...testItem,segments:[],smart:{brief:'摘要',sources:[],actions:[],body:[],body_source:'source'}};renderSmart();");
+ assert.ok(f.element('#document').innerHTML.includes('data-action="polish-body"'));
+ f.run("state.detail.smart.body_source='model';renderSmart();");
+ assert.ok(!f.element('#document').innerHTML.includes('polish-body'));
+});
+test('recordings open on the original and offer the smart document on demand',()=>{
+ const f=fixture();
+ assert.equal(f.run('state.tab'),'original');
+ f.run("state.data.settings.analysis_enabled=true;state.detail={...testItem,text_status:'disabled',segments:[],smart:{brief:'',sources:[],actions:[],body:[]}};renderSmart();");
+ assert.ok(f.element('#document').innerHTML.includes('生成智能稿'));
+ assert.ok(f.element('#document').innerHTML.includes(`data-enrich="${f.item.id}"`));
+ f.run("state.detail.text_status='running';renderSmart();");
+ assert.ok(!f.element('#document').innerHTML.includes('生成智能稿'));
+});
 test('progress has measured units and no invented percentage for unknown work',()=>{
  const f=fixture();
  assert.ok(!f.run("progressHTML({stage:'加载模型',updated:1700000000})").includes('<progress'));
@@ -106,4 +122,31 @@ test('scan button reflects a running scan and completion shows the round summary
  assert.equal(f.element('#toast').textContent,'扫描完成：发现 1 条新录音 · 已转写 1 条 · 失败 0 条');
  f.run("state.view='library';renderLibrary();");
  assert.ok(f.element('#main').innerHTML.includes('data-action="scan" data-label="立即扫描">立即扫描'));
+});
+
+test('polish offers a retry for failed chunks and stays disabled while a request waits',()=>{
+ const f=fixture();
+ f.run("state.detail={...testItem,text_status:'completed',segments:[],smart:{brief:'摘要',sources:[],actions:[],body:[],body_source:'model',body_retry:true}};renderSmart();");
+ assert.ok(f.element('#document').innerHTML.includes('重试这些段落'));
+ assert.ok(!f.element('#document').innerHTML.includes('polish-body" disabled'));
+ f.run("state.detail.text_status='pending';renderSmart();");
+ assert.ok(f.element('#document').innerHTML.includes('polish-body" disabled'));
+ f.run("state.detail.smart.body_source='source';state.detail.smart.body_retry=false;renderSmart();");
+ assert.ok(f.element('#document').innerHTML.includes('润色正文'));
+ assert.ok(f.element('#document').innerHTML.includes('polish-body" disabled'));
+});
+test('a requested smart document reads as waiting, not as never generated',()=>{
+ const f=fixture();
+ f.run("state.data.settings.analysis_enabled=true;state.detail={...testItem,text_available:false,text_status:'pending',segments:[],smart:{brief:'',sources:[],actions:[],body:[]}};renderSmart();");
+ assert.ok(!f.element('#document').innerHTML.includes('还没有生成智能稿'));
+ assert.ok(f.run("detailStatus(state.detail)").includes('文稿等待生成'));
+});
+test('history tells absorbed corrections apart from undone ones',()=>{
+ const f=fixture();
+ f.run("state.detail={...testItem,revisions:[{id:'r',active:false,created:1700000000,edits:[],absorbed:[{before:'提议',after:'建议'}]},{id:'s',active:false,created:1700000000,edits:[{before:'甲',after:'乙'}]}]};renderRevisionHistory();");
+ const html=f.element('#document').innerHTML;
+ assert.ok(html.includes('提议 → 建议'));
+ assert.ok(html.includes('已并入润色正文'));
+ assert.ok(html.includes('已撤销'));
+ assert.ok(!html.includes('data-undo-revision'));
 });

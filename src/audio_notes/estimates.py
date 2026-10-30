@@ -6,6 +6,7 @@ import time
 from functools import lru_cache
 from pathlib import Path
 
+from .control import smart_is_automatic
 from .knowledge import Knowledge
 
 
@@ -107,7 +108,7 @@ def estimates(config, items, requests=None, backlog=None):
         times = {}
         for stage in ("asr", "speaker", "text"):
             disabled = (stage == "speaker" and not config.speakers.get("enabled")) or (
-                stage == "text" and not config.analysis.get("enabled")
+                stage == "text" and not smart_is_automatic(config)
             )
             if disabled or (only_text and stage != "text"):
                 times[stage] = {
@@ -141,7 +142,7 @@ def estimates(config, items, requests=None, backlog=None):
                         "estimates": waiting_estimate(duration),
                     }
                 )
-        elif request["kind"] in ("enrich", "diarize"):
+        elif request["kind"] in ("enrich", "diarize", "polish"):
             item = next((i for i in items if i["id"] == payload.get("job_id")), None)
             request["estimates"] = item.get("estimates") if item else waiting_estimate(None, True)
     for recording in backlog or []:

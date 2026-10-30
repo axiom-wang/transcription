@@ -347,12 +347,19 @@ class Pipeline:
                 self.write_index()
                 counts.completed += 1
                 log.info("完成：%s → %s", source.name, directory)
+                from .control import smart_is_automatic
                 from .knowledge import Knowledge
-                if announce_completion and (Knowledge(self.config.state).preferences()['notification'] == 'stages' or not self.config.analysis.get('enabled')):
+                automatic = smart_is_automatic(self.config)
+                if announce_completion and (Knowledge(self.config.state).preferences()['notification'] == 'stages' or not automatic):
                     notify(
                         self.config,
                         "原文已可读",
-                        f"{recording_name}\n可以先阅读原文，智能稿将在完成后通知。",
+                        f"{recording_name}\n"
+                        + (
+                            "可以先阅读原文，智能稿将在完成后通知。"
+                            if automatic
+                            else "可以阅读原文；需要时可在听记中生成智能稿。"
+                        ),
                     )
             except KeyboardInterrupt:
                 if job_id:
@@ -370,50 +377,42 @@ class Pipeline:
                     f"{recording_name}\n请查看项目状态或 state/logs/workflow.log。",
                 )
         self.write_index()
-        if self.config.speakers.get("enabled"):
-            from .diarization import diarize_completed
+        # New recordings finish every stage before earlier failures get another attempt;
+        # both phases draw on one max_jobs_per_scan allowance.
+        speaker_runs, text_runs = [], []
+        for phase in ("new", "retry"):
+            if self.config.speakers.get("enabled"):
+                from .diarization import diarize_completed
 
-            jobs = self.store.completed()
-            if sources is not None:
-                selected = {str(p) for p in sources}
-                ids = {
-                    row["job_id"]
-                    for row in self.store.db.execute("SELECT job_id,path FROM sources")
-                    if row["path"] in selected
-                }
-                jobs = [job for job in jobs if job["id"] in ids]
-            diarize_completed(
-                self.config,
-                jobs,
-                limit=(
-                    self.config.speakers["max_jobs_per_scan"]
-                    if sources is None and followup_limit
-                    else None
-                ),
-            )
-            self.write_index()
-        if self.config.analysis.get("enabled"):
-            from .enrichment import enrich_completed
+                diarize_completed(
+                    self.config,
+                    self.selected_jobs(sources),
+                    limit=(
+                        self.config.speakers["max_jobs_per_scan"]
+                        if sources is None and followup_limit
+                        else None
+                    ),
+                    phase=phase,
+                    started=speaker_runs,
+                )
+                self.write_index()
+            if self.config.analysis.get("enabled"):
+                from .control import smart_is_automatic
+                from .enrichment import enrich_completed
 
-            jobs = self.store.completed()
-            if sources is not None:
-                selected = {str(p) for p in sources}
-                ids = {
-                    row["job_id"]
-                    for row in self.store.db.execute("SELECT job_id,path FROM sources")
-                    if row["path"] in selected
-                }
-                jobs = [job for job in jobs if job["id"] in ids]
-            enrich_completed(
-                self.config,
-                jobs,
-                limit=(
-                    self.config.analysis["max_jobs_per_scan"]
-                    if sources is None and followup_limit
-                    else None
-                ),
-            )
-            self.write_index()
+                enrich_completed(
+                    self.config,
+                    self.selected_jobs(sources),
+                    limit=(
+                        self.config.analysis["max_jobs_per_scan"]
+                        if sources is None and followup_limit
+                        else None
+                    ),
+                    phase=phase,
+                    titles_only=not smart_is_automatic(self.config),
+                    started=text_runs,
+                )
+                self.write_index()
         log.info(
             "本轮完成 %d，跳过 %d，等待 %d，失败 %d",
             counts.completed,
@@ -423,6 +422,18 @@ class Pipeline:
         )
         return counts
 
+    def selected_jobs(self, sources):
+        jobs = self.store.completed()
+        if sources is None:
+            return jobs
+        selected = {str(p) for p in sources}
+        ids = {
+            row["job_id"]
+            for row in self.store.db.execute("SELECT job_id,path FROM sources")
+            if row["path"] in selected
+        }
+        return [job for job in jobs if job["id"] in ids]
+
     def write_index(self):
         write_index(self.config, self.store.completed())
 
@@ -431,7 +442,7 @@ def write_index(config, completed):
     txt_link = quote(os.path.relpath(config.txt_output, config.output)) + "/"
     text = (
         "# 录音文档索引\n\n阅读版与简体完整稿保留全部识别内容，统一转换为简体；"
-        "模型原始稿另行保留。优化交付稿与分析稿由本机文本模型生成，可通过引用核对原文。\n\n"
+        "模型原始稿另行保留。分析稿和交付稿在听记中按需生成，分析稿可通过引用核对原文。\n\n"
         f"[打开转写TXT文件夹]({txt_link})：简体纯文本按录音名称汇集。\n\n"
     )
     for job in completed:
@@ -493,14 +504,15 @@ def write_index(config, completed):
                 f"[交付TXT]({directory.name}/polished.txt) · "
             )
         elif config.analysis.get("enabled"):
-            try:
-                stage = json.loads((directory / "enrichment.status.json").read_text())["status"]
-            except (OSError, ValueError, KeyError):
-                stage = "pending"
-            delivery = {
-                "running": "文稿优化与分析中 · ",
-                "failed": "文稿优化与分析待重试（原稿可读） · ",
-            }.get(stage, "文稿优化与分析待处理 · ")
+            from .control import read_json, smart_is_automatic
+
+            marker = read_json(directory / "enrichment.status.json")
+            stage = marker.get("status", "pending")
+            if smart_is_automatic(config) or marker.get("requested"):
+                delivery = {
+                    "running": "文稿优化与分析中 · ",
+                    "failed": "文稿优化与分析待重试（原稿可读） · ",
+                }.get(stage, "文稿优化与分析待处理 · ")
         text += (
             f"- **{label}** · "
             + speaker_status

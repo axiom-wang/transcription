@@ -14,15 +14,25 @@ from .enrichment import (
     ANALYZE,
     GENERATION,
     POLISH,
+    POLISH_DIGITS,
+    POLISH_PARTS,
+    POLISH_SKIP_CHARS,
     REVIEW,
     SYSTEM,
     chunks_for,
     ground_analysis,
+    merge_analyses,
     parse_model_json,
+    polish_batches,
     polish_chunks_for,
+    polish_fallback,
+    polish_misaligned,
+    repair_citations,
     source_texts,
+    split_polished_parts,
     validate_analysis,
     validate_polish,
+    verbatim_polish,
 )
 from .files import atomic_json
 
@@ -69,19 +79,8 @@ def process(request):
         model, tokenizer = load(request["model_dir"], tokenizer_config={"trust_remote_code": False})
         print("本地文本模型加载完成", flush=True)
 
-    def generate_json(name, instruction, payload, validator, plain=False):
+    def generate_json(name, instruction, payload, validator):
         path = work / f"{name}.json"
-        # Diarization can isolate a syllable or a brief acknowledgement. Preserve
-        # these verbatim rather than asking the model to invent missing context.
-        if plain and len("".join(u["text"] for u in payload).strip()) <= 12:
-            result = {
-                "paragraphs": [{"unit_ids": [u["id"]], "text": u["text"]} for u in payload],
-                "corrections": [],
-                "uncertainties": [],
-            }
-            validator(result)
-            atomic_json(path, result)
-            return result
         if path.is_file():
             try:
                 cached = json.loads(path.read_text())
@@ -89,120 +88,29 @@ def process(request):
                 return cached
             except INVALID_OUTPUT:
                 path.rename(work / f"{name}.invalid-{time.time_ns()}.json")
-        if not plain:
-            for rejected in sorted(work.glob(f"{name}.rejected-*.json"), reverse=True):
-                try:
-                    previous = json.loads(rejected.read_text())
-                    if "达到长度上限" in previous["error"]:
-                        continue
-                    recovered, _ = parse_model_json(previous["response"])
-                    validator(recovered)
-                    atomic_json(path, recovered)
-                    return recovered
-                except INVALID_OUTPUT:
+        for rejected in sorted(work.glob(f"{name}.rejected-*.json"), reverse=True):
+            try:
+                previous = json.loads(rejected.read_text())
+                if "达到长度上限" in previous["error"]:
                     continue
+                recovered, _ = parse_model_json(previous["response"])
+                validator(recovered)
+                atomic_json(path, recovered)
+                return recovered
+            except INVALID_OUTPUT:
+                continue
         import mlx.core as mx
-        from mlx_lm import stream_generate
-        from mlx_lm.sample_utils import make_logits_processors, make_sampler
 
         error = ""
         for attempt in range(2):
-            content = (
-                instruction
-                + "\n"
-                + (
-                    "\n\n".join(u["text"] for u in payload)
-                    if plain
-                    else json.dumps(payload, ensure_ascii=False)
-                )
-            )
+            content = instruction + "\n" + json.dumps(payload, ensure_ascii=False)
             if error:
-                content += (
-                    "\n上次输出未通过检查，请修复并重新输出完整"
-                    + ("正文" if plain else "JSON")
-                    + "。错误："
-                    + error
-                )
-            prompt = tokenizer.apply_chat_template(
-                [
-                    {
-                        "role": "system",
-                        "content": prompts["system"].replace(
-                            "只输出一个合法JSON对象，不输出Markdown围栏、思考过程或解释。",
-                            "只输出润色后的正文，不输出解释、标题或JSON。",
-                        )
-                        if plain
-                        else prompts["system"],
-                    },
-                    {"role": "user", "content": content},
-                ],
-                tokenize=False,
-                add_generation_prompt=True,
-                enable_thinking=(not plain and sampling.get("analysis_thinking", False)),
-            )
-            tokens = tokenizer.encode(prompt)
-            if len(tokens) > request["settings"]["max_input_tokens"]:
-                raise ValueError("输入超过本机文本处理预算；请减小 analysis.chunk_chars 后重试")
-
-            def infer(input_tokens, budget, temperature, top_p, label):
-                pieces, last = [], None
-                for last in stream_generate(
-                    model,
-                    tokenizer,
-                    input_tokens,
-                    max_tokens=budget,
-                    sampler=make_sampler(temp=temperature, top_p=top_p, top_k=sampling["top_k"]),
-                    logits_processors=make_logits_processors(),
-                    prefill_step_size=sampling["prefill_step_size"],
-                ):
-                    pieces.append(last.text)
-                    if last.generation_tokens % 256 == 0:
-                        report(tokens=last.generation_tokens)
-                        print(f"{name} {label}已生成 {last.generation_tokens} tokens", flush=True)
-                return last, "".join(pieces)
-
-            thinking = not plain and sampling.get("analysis_thinking", False)
-            mx.random.seed(sampling["seed"] + attempt)
-            response, text = infer(
-                tokens,
-                min(
-                    request["settings"]["max_output_tokens"],
-                    sampling.get("thinking_budget_tokens", 1536),
-                )
-                if thinking
-                else request["settings"]["max_output_tokens"],
-                sampling.get("thinking_temperature", sampling["temperature"])
-                if thinking
-                else sampling["temperature"],
-                sampling.get("thinking_top_p", sampling["top_p"])
-                if thinking
-                else sampling["top_p"],
-                "推理" if thinking else "正文",
-            )
-            thinking_tokens = response.generation_tokens if response is not None and thinking else 0
-            if thinking and response is not None and response.finish_reason == "length":
-                prefix = text if "</think>" in text else text + "\n</think>\n\n"
-                continuation = tokenizer.encode(prompt + prefix)
-                if len(continuation) > request["settings"]["max_input_tokens"]:
-                    raise ValueError("推理续写超过本机上下文预算，请减小 chunk_chars")
-                response, final = infer(
-                    continuation,
-                    request["settings"]["max_output_tokens"],
-                    sampling["temperature"],
-                    sampling["top_p"],
-                    "成稿",
-                )
-                text = prefix + final
-            text = text.strip()
-            if thinking and "</think>" in text:
-                text = text.split("</think>", 1)[1].strip()
+                content += "\n上次输出未通过检查，请修复并重新输出完整JSON。错误：" + error
+            response, text, thinking_tokens = complete(name, content, False, attempt)
             try:
                 if response is None or response.finish_reason != "stop":
                     raise ValueError("模型输出达到长度上限，不交付截断内容")
-                if plain:
-                    result, repaired_keys = polish_result(text, payload), 0
-                else:
-                    result, repaired_keys = parse_model_json(text)
+                result, repaired_keys = parse_model_json(text)
                 validator(result)
                 atomic_json(path, result)
                 metrics.append(
@@ -233,6 +141,176 @@ def process(request):
                 print(f"{name} 校验未通过，将修复：{error}", flush=True)
                 mx.clear_cache()
         raise ValueError(f"{name} 两次生成仍未通过检查：{error}")
+
+    def complete(name, content, plain, attempt):
+        """One model call; thinking and its continuation apply only to JSON output."""
+        import mlx.core as mx
+        from mlx_lm import stream_generate
+        from mlx_lm.sample_utils import make_logits_processors, make_sampler
+
+        prompt = tokenizer.apply_chat_template(
+            [
+                {
+                    "role": "system",
+                    "content": prompts["system"].replace(
+                        "只输出一个合法JSON对象，不输出Markdown围栏、思考过程或解释。",
+                        "只输出润色后的正文，不输出解释、标题或JSON。",
+                    )
+                    if plain
+                    else prompts["system"],
+                },
+                {"role": "user", "content": content},
+            ],
+            tokenize=False,
+            add_generation_prompt=True,
+            enable_thinking=(not plain and sampling.get("analysis_thinking", False)),
+        )
+        tokens = tokenizer.encode(prompt)
+        if len(tokens) > request["settings"]["max_input_tokens"]:
+            raise ValueError("输入超过本机文本处理预算；请减小 analysis.chunk_chars 后重试")
+
+        def infer(input_tokens, budget, temperature, top_p, label):
+            pieces, last = [], None
+            for last in stream_generate(
+                model,
+                tokenizer,
+                input_tokens,
+                max_tokens=budget,
+                sampler=make_sampler(temp=temperature, top_p=top_p, top_k=sampling["top_k"]),
+                logits_processors=make_logits_processors(),
+                prefill_step_size=sampling["prefill_step_size"],
+            ):
+                pieces.append(last.text)
+                if last.generation_tokens % 256 == 0:
+                    report(tokens=last.generation_tokens)
+                    print(f"{name} {label}已生成 {last.generation_tokens} tokens", flush=True)
+            return last, "".join(pieces)
+
+        thinking = not plain and sampling.get("analysis_thinking", False)
+        mx.random.seed(sampling["seed"] + attempt)
+        response, text = infer(
+            tokens,
+            min(
+                request["settings"]["max_output_tokens"],
+                sampling.get("thinking_budget_tokens", 1536),
+            )
+            if thinking
+            else request["settings"]["max_output_tokens"],
+            sampling.get("thinking_temperature", sampling["temperature"])
+            if thinking
+            else sampling["temperature"],
+            sampling.get("thinking_top_p", sampling["top_p"]) if thinking else sampling["top_p"],
+            "推理" if thinking else "正文",
+        )
+        thinking_tokens = response.generation_tokens if response is not None and thinking else 0
+        if thinking and response is not None and response.finish_reason == "length":
+            prefix = text if "</think>" in text else text + "\n</think>\n\n"
+            continuation = tokenizer.encode(prompt + prefix)
+            if len(continuation) > request["settings"]["max_input_tokens"]:
+                raise ValueError("推理续写超过本机上下文预算，请减小 chunk_chars")
+            response, final = infer(
+                continuation,
+                request["settings"]["max_output_tokens"],
+                sampling["temperature"],
+                sampling["top_p"],
+                "成稿",
+            )
+            text = prefix + final
+        text = text.strip()
+        if thinking and "</think>" in text:
+            text = text.split("</think>", 1)[1].strip()
+        return response, text, thinking_tokens
+
+    def polish_batch(batch, finished):
+        """One call covers neighbouring turns; anything doubtful is redone with no neighbours."""
+        import mlx.core as mx
+
+        name = f"polish-batch-{batch[0][0]}"
+        pending, error = dict(enumerate(batch, 1)), ""
+        content = (
+            prompts["polish"]
+            + POLISH_DIGITS
+            + POLISH_PARTS
+            + "\n"
+            + "\n\n".join(
+                f"【{number}】" + "".join(u["text"] for u in chunk)
+                for number, (_, chunk) in pending.items()
+            )
+        )
+        response, text, _ = complete(name, content, True, 0)
+        parts = split_polished_parts(text, set(pending))
+        sources = {
+            number: "".join(u["text"] for u in chunk) for number, (_, chunk) in pending.items()
+        }
+        # One misplaced reply makes its neighbours suspect too, so none of the batch is kept.
+        misaligned = polish_misaligned(parts, sources)
+        for number, (index, chunk) in list(pending.items()):
+            try:
+                if response is None or response.finish_reason != "stop":
+                    raise ValueError("模型输出达到长度上限，不交付截断内容")
+                if misaligned:
+                    raise ValueError("模型把内容写到了其他段落")
+                if number not in parts:
+                    raise ValueError("模型输出缺少这一段")
+                accept_polish(index, chunk, parts[number], finished)
+                del pending[number]
+            except INVALID_OUTPUT as exc:
+                error = str(exc)
+                # Private generated content stays in the recording's local work directory.
+                atomic_json(
+                    work / f"polish-{index}.rejected-0.json",
+                    {"error": error, "response": parts.get(number, text)},
+                )
+                print(f"polish-{index} 校验未通过，将单独重试：{error}", flush=True)
+        metrics.append(
+            {
+                "stage": name,
+                "prompt_tokens": response.prompt_tokens,
+                "generation_tokens": response.generation_tokens,
+                "tokens_per_second": response.generation_tps,
+                "peak_memory_gb": response.peak_memory,
+            }
+        )
+        print(
+            f"已完成 {name}，{len(batch)} 段，输出 {response.generation_tokens} tokens，"
+            f"{response.generation_tps:.1f} tokens/s，峰值 {response.peak_memory:.2f} GB",
+            flush=True,
+        )
+        mx.clear_cache()
+        for index, chunk in pending.values():
+            polish_alone(index, chunk, error, finished)
+
+    def polish_alone(index, chunk, error, finished):
+        import mlx.core as mx
+
+        source = "".join(u["text"] for u in chunk)
+        content = f"{prompts['polish']}{POLISH_DIGITS}上次输出未通过检查：{error}。\n{source}"
+        response, text, _ = complete(f"polish-{index}", content, True, 1)
+        try:
+            if response is None or response.finish_reason != "stop":
+                raise ValueError("模型输出达到长度上限，不交付截断内容")
+            if polish_misaligned({1: text}, {1: source}):
+                raise ValueError("润色稿与原文差异过大")
+            accept_polish(index, chunk, text, finished)
+        except INVALID_OUTPUT as exc:
+            error = str(exc)
+            atomic_json(
+                work / f"polish-{index}.rejected-1.json", {"error": error, "response": text}
+            )
+            result = polish_fallback(chunk, error)
+            validate_polish(result, chunk)
+            atomic_json(work / f"polish-{index}.json", result)
+            finished[index] = result
+            print(f"polish-{index} 两次生成仍未通过检查，保留原文并标记待核对：{error}", flush=True)
+        mx.clear_cache()
+
+    def accept_polish(index, chunk, reply, finished):
+        if "【" in reply and "【" not in "".join(u["text"] for u in chunk):
+            raise ValueError("润色稿带有多余的【】标记")
+        result = polish_result(reply, chunk)
+        validate_polish(result, chunk)
+        atomic_json(work / f"polish-{index}.json", result)
+        finished[index] = result
 
     def polish_result(text, chunk):
         ids = [u["id"] for u in chunk]
@@ -343,28 +421,60 @@ def process(request):
         instruction = prompts["analyze"]
         if basis and "brief" in basis[0]:
             instruction += "\n以下为覆盖全部录音的分段分析，请合并重复主题、保留分歧和明确行动，沿用source_ids。"
-        draft = generate_json(name, instruction, basis, lambda r: validate_analysis(r, allowed))
+        draft = generate_json(
+            name,
+            instruction,
+            basis,
+            lambda r: validate_analysis(repair_citations(r, allowed), allowed),
+        )
         return ground_analysis(draft, sources)
 
-    polished, summaries = [], []
+    def merge_checked(name, group, allowed):
+        try:
+            return analyze_checked(name, group, allowed)
+        except INVALID_OUTPUT as exc:
+            print(f"{name} 未通过检查，改为直接合并分段分析：{exc}", flush=True)
+            return ground_analysis(validate_analysis(merge_analyses(group), allowed), sources)
+
+    summaries = []
+    finished, to_polish, reused = {}, [], 0
+    reusable = request.get('reuse_polished')
+    reusing = isinstance(reusable, list) and len(reusable) == len(polish_chunks)
+    # Requests that do not say otherwise keep polishing; automatic delivery opts out.
+    polishing = request.get("polish", True)
     for i, chunk in enumerate(polish_chunks):
-        reusable = request.get('reuse_polished')
-        if isinstance(reusable, list) and len(reusable) == len(polish_chunks):
+        if reusing:
             try:
-                polished.append(validate_polish(reusable[i], chunk))
+                finished[i] = validate_polish(reusable[i], chunk)
+                reused += 1
                 continue
             except INVALID_OUTPUT:
-                pass  # A reused body that no longer validates is regenerated, not fatal.
-        report("整理文稿", completed=i, total=len(polish_chunks), unit="段")
-        polished.append(
-            generate_json(
-                f"polish-{i}",
-                prompts["polish"],
-                chunk,
-                lambda r, c=chunk: validate_polish(r, c),
-                plain=True,
-            )
-        )
+                pass  # A chunk with nothing valid to reuse is regenerated, not fatal.
+        if not polishing:
+            finished[i] = verbatim_polish(chunk)
+            continue
+        path = work / f"polish-{i}.json"
+        # Diarization can isolate a syllable or a brief acknowledgement. Preserve
+        # these verbatim rather than asking the model to invent missing context.
+        if len("".join(u["text"] for u in chunk).strip()) <= POLISH_SKIP_CHARS:
+            finished[i] = validate_polish(verbatim_polish(chunk), chunk)
+            atomic_json(path, finished[i])
+            continue
+        if path.is_file():
+            try:
+                finished[i] = validate_polish(json.loads(path.read_text()), chunk)
+                continue
+            except INVALID_OUTPUT:
+                path.rename(work / f"polish-{i}.invalid-{time.time_ns()}.json")
+        to_polish.append((i, chunk))
+    for batch in polish_batches(to_polish):
+        report("整理文稿", completed=len(finished), total=len(polish_chunks), unit="段")
+        polish_batch(batch, finished)
+    polished = [finished[i] for i in range(len(polish_chunks))]
+    if request.get("mode") == "polish":
+        atomic_json(work / "polished.json", polished)
+        print("正文润色完成", flush=True)
+        return
     for i, chunk in enumerate(chunks):
         report("分析原文", completed=i, total=len(chunks), unit="段")
         source = [{k: v for k, v in u.items() if k != "id"} for u in chunk]
@@ -389,7 +499,7 @@ def process(request):
         if len(groups) == len(summaries):
             raise ValueError("分段分析过长，未丢弃任何内容；请调低文本分段大小后重试")
         summaries = [
-            analyze_checked(f"merge-{level}-{i}", group, allowed) for i, group in enumerate(groups)
+            merge_checked(f"merge-{level}-{i}", group, allowed) for i, group in enumerate(groups)
         ]
         level += 1
     atomic_json(
@@ -398,6 +508,7 @@ def process(request):
             "fingerprint": request["fingerprint"],
             "units": units,
             "polished": polished,
+            "body": "model" if polishing or (reusing and reused == len(polish_chunks)) else "source",
             "analysis": summaries[0] if summaries else None,
             "review_issues": pending_reviews,
             "metrics": {"elapsed_seconds": time.monotonic() - started, "stages": metrics},

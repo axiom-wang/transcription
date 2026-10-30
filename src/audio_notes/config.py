@@ -111,6 +111,7 @@ def load_config(path: Path) -> Config:
     notifications = {"enabled": True}
     analysis = {
         "enabled": False,
+        "automatic": False,
         "chunk_chars": 4000,
         "max_input_tokens": 16000,
         "max_output_tokens": 6000,
@@ -208,6 +209,8 @@ def load_config(path: Path) -> Config:
         raise ValueError("voice_memos.enabled 必须是 true 或 false")
     if type(analysis["enabled"]) is not bool:
         raise ValueError("analysis.enabled 必须是 true 或 false")
+    if type(analysis["automatic"]) is not bool:
+        raise ValueError("analysis.automatic 必须是 true 或 false")
     if type(speakers["enabled"]) is not bool:
         raise ValueError("speakers.enabled 必须是 true 或 false")
     if speakers["device"] not in ("auto", "cpu", "mps"):
@@ -217,7 +220,7 @@ def load_config(path: Path) -> Config:
             raise ValueError(f"speakers.{key} 数值无效")
     if speakers["num_speakers"] > 50:
         raise ValueError("speakers.num_speakers 必须介于 0 和 50；0 自动判断人数")
-    for key in set(analysis) - {"enabled"}:
+    for key in set(analysis) - {"enabled", "automatic"}:
         if type(analysis[key]) is not int or analysis[key] < 1:
             raise ValueError(f"analysis.{key} 必须是正整数")
     if not 1000 <= analysis["chunk_chars"] <= 8000:

@@ -166,13 +166,14 @@ class WorkbenchStore:
                 db.execute("SELECT * FROM metadata WHERE audio_hash=?", (audio_hash,)).fetchone()
             )
 
-    def enqueue(self, kind, payload, title):
+    def enqueue(self, kind, payload, title, alongside_running=False):
         encoded = json.dumps(payload, sort_keys=True, ensure_ascii=False)
         now = time.time()
+        active = "('queued')" if alongside_running else "('queued','running')"
         with self.connect() as db:
             db.execute("BEGIN IMMEDIATE")
             existing = db.execute(
-                "SELECT * FROM requests WHERE kind=? AND payload=? AND status IN ('queued','running')",
+                f"SELECT * FROM requests WHERE kind=? AND payload=? AND status IN {active}",
                 (kind, encoded),
             ).fetchone()
             if existing:

@@ -27,6 +27,7 @@ MODEL_FILES = (
 )
 SCHEMA = 1
 VIEW_SCHEMA = 3
+TAIL_TOLERANCE_SECONDS = 2.0
 
 
 def check_speaker_model(config, verify=False):
@@ -150,6 +151,20 @@ def validate_turns(turns, duration, exclusive=False):
             raise ValueError("说话人编号无效")
         last_start, last_end = t["start"], t["end"]
     return turns
+
+
+def trim_tail(turns, duration):
+    """The model's last window can slightly outlast the audio; larger overruns stay invalid."""
+    if not isinstance(turns, list):
+        return turns
+    trimmed = []
+    for t in turns:
+        if duration < t["end"] <= duration + TAIL_TOLERANCE_SECONDS:
+            if t["start"] >= duration:
+                continue
+            t = {**t, "end": duration}
+        trimmed.append(t)
+    return trimmed
 
 
 def annotation_turns(annotation, mapping=None):
@@ -401,6 +416,8 @@ def diarize_one(config, job, manifest, force=False, worker=run_speaker_worker):
     }
     worker(config, request, config.state / "logs" / f"speakers-{raw['job_id']}.log")
     data = json.loads((work / "turns.json").read_text())
+    data["turns"] = trim_tail(data["turns"], raw["info"]["duration"])
+    data["exclusive_turns"] = trim_tail(data["exclusive_turns"], raw["info"]["duration"])
     validate_turns(data["turns"], raw["info"]["duration"])
     validate_turns(data["exclusive_turns"], raw["info"]["duration"], exclusive=True)
     if (
@@ -433,10 +450,29 @@ def diarize_one(config, job, manifest, force=False, worker=run_speaker_worker):
 
 
 def diarize_completed(
-    config, jobs, limit=None, force=False, retry_now=False, worker=run_speaker_worker
+    config,
+    jobs,
+    limit=None,
+    force=False,
+    retry_now=False,
+    worker=run_speaker_worker,
+    phase=None,
+    started=None,
 ):
-    """Caller holds the ASR run lock; failures remain independent of ASR success."""
-    from .control import paused, yield_to_workbench
+    """Caller holds the ASR run lock; failures remain independent of ASR success.
+
+    phase "new" skips earlier failures; phase "retry" gives way to queued work. started
+    collects the jobs begun and counts toward limit, so calls sharing a list share one allowance.
+    """
+    from .control import (
+        awaiting_retry,
+        failed_attempts,
+        failed_status,
+        paused,
+        queued_work,
+        retry_due,
+        yield_to_workbench,
+    )
     from .pipeline import write_exports
     from .txt_exports import publish_txt
 
@@ -445,6 +481,8 @@ def diarize_completed(
     try:
         manifest = check_speaker_model(config)
     except ValueError as exc:
+        if phase == "retry":
+            return 0
         for job in jobs:
             directory = Path(job["output"])
             if directory.parent != config.output:
@@ -458,9 +496,14 @@ def diarize_completed(
             )
         log.warning("%s；原始转写可继续使用", exc)
         return 0
-    completed = attempted = 0
+    started = [] if started is None else started
+    completed = 0
     for job in jobs:
-        if paused(config) or (limit is not None and yield_to_workbench(config)):
+        if (
+            paused(config)
+            or (limit is not None and yield_to_workbench(config))
+            or (phase == "retry" and queued_work(config))
+        ):
             break
         directory = Path(job["output"])
         if directory.parent != config.output or not (directory / "complete.json").is_file():
@@ -474,18 +517,23 @@ def diarize_completed(
         ) == key and "diarization" in speaker_view(raw, directory)
         if not force and valid:
             continue
-        if (
-            not force
-            and not retry_now
-            and status.get("status") == "failed"
-            and status.get("fingerprint") == key
-            and time.time() - status.get("updated", 0) < config.speakers["retry_seconds"]
-        ):
-            continue
-        if limit is not None and attempted >= limit:
+        if not force and not retry_now:
+            if phase == "new" and awaiting_retry(status, key):
+                continue
+            if not retry_due(status, config.speakers["retry_seconds"], key):
+                continue
+        if limit is not None and len(started) >= limit:
             break
-        attempted += 1
-        atomic_json(status_path, {"status": "running", "fingerprint": key, "updated": time.time()})
+        started.append(job["id"])
+        atomic_json(
+            status_path,
+            {
+                "status": "running",
+                "fingerprint": key,
+                "attempts": failed_attempts(status, key),
+                "updated": time.time(),
+            },
+        )
         try:
             changed = diarize_one(config, job, manifest, force=force, worker=worker)
             write_exports(raw, directory, config.markdown)
@@ -495,9 +543,6 @@ def diarize_completed(
                 status_path, {"status": "completed", "fingerprint": key, "updated": time.time()}
             )
         except Exception as exc:
-            atomic_json(
-                status_path,
-                {"status": "failed", "fingerprint": key, "error": str(exc), "updated": time.time()},
-            )
+            atomic_json(status_path, failed_status(status, exc, key))
             log.exception("说话人区分失败，完整转写仍保留：%s", directory.name)
     return completed

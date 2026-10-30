@@ -1,5 +1,6 @@
 """PRD acceptance tests on synthetic recordings only."""
 
+import json
 from dataclasses import replace
 
 import pytest
@@ -408,11 +409,16 @@ def test_new_files_arriving_during_scan_are_not_lost(config, monkeypatch):
     (watched / "late.m4a").write_bytes(b"late")
     watcher.last_check = 0
     watcher.tick()
-    assert watcher.dirty
+    # Queued right away so the running scan's retry phase can give way to the new recording.
+    assert not watcher.dirty
+    assert k.store.pending()["id"] != first
     k.store.finish(first, "completed")
+    second = k.store.pending()["id"]
+    k.store.claim(second)
+    (watched / "later.m4a").write_bytes(b"later")
     watcher.last_check = 0
     watcher.tick()
-    assert k.store.pending()["id"] != first
+    assert k.store.pending()["id"] != second
 
 
 def test_manual_scan_can_override_waiting_automatic_scan(config):
@@ -440,3 +446,23 @@ def test_regeneration_removes_only_untouched_obsolete_tasks(app):
     atomic_json(path, result)
     retained = knowledge_read(app, {"kind": "tasks"})["items"]
     assert len(retained) == 1 and retained[0]["status"] == "done"
+
+
+def test_polish_is_queued_on_request_and_runs_only_the_polish_stage(app, monkeypatch):
+    import audio_notes.cli as cli
+    from audio_notes.workbench import execute_request
+
+    app.config = replace(app.config, analysis={**app.config.analysis, "enabled": True})
+    queued = app.action({"action": "polish", "id": app.test_id})
+    assert queued["kind"] == "polish"
+    assert detail(app.config, app.store, app.test_id)["smart"]["body_source"] is None
+    add_generation(app)
+    assert detail(app.config, app.store, app.test_id)["smart"]["body_source"] == "model"
+    path = app.config.output / app.test_id / "enrichment" / ("a" * 64) / "result.json"
+    atomic_json(path, {**json.loads(path.read_text()), "body": "source"})
+    assert detail(app.config, app.store, app.test_id)["smart"]["body_source"] == "source"
+    seen = []
+    monkeypatch.setenv("AUDIO_NOTES_WORKBENCH_TASK", "1")
+    monkeypatch.setattr(cli, "main", lambda args: seen.append(args[2:]) or 0)
+    assert execute_request(app.config, queued["id"]) == 0
+    assert seen == [["enrich", "--polish", app.test_id]]

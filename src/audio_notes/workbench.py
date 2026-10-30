@@ -22,7 +22,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, quote, unquote, urlsplit
 
-from .control import lock_busy, paused, read_json, set_paused
+from .control import lock_busy, paused, read_json, set_paused, smart_is_automatic
 from .files import AlreadyRunning, atomic_json, run_lock
 from .workbench_library import (
     artifact,
@@ -106,6 +106,8 @@ def execute_request(config, key):
                 args += ["diarize", "--force", payload["job_id"]]
             elif request["kind"] == "title":
                 args += ["enrich", "--title", payload["job_id"]]
+            elif request["kind"] == "polish":
+                args += ["enrich", "--polish", payload["job_id"]]
             elif request["kind"] == "scan":
                 wait = config.processing["settle_seconds"] + 30
                 args += ["run", "--wait-limit", str(wait)]
@@ -122,7 +124,10 @@ def execute_request(config, key):
                 marker = read_json(config.output / payload["job_id"] / "speakers.status.json")
                 if marker.get("status") != "completed":
                     code, error = 1, marker.get("error") or "说话人区分尚未完成，原稿仍可阅读。"
-                elif config.analysis.get("enabled"):
+                elif smart_is_automatic(config) or (
+                    config.analysis.get("enabled")
+                    and (config.output / payload["job_id"] / "enrichment.complete.json").is_file()
+                ):
                     code = main(["--config", str(config.file), "enrich", payload["job_id"]])
                     if code:
                         error = "说话人区分已完成，整理与分析稿仍待重试。"
@@ -148,7 +153,10 @@ def execute_request(config, key):
                 for entry in rows(config):
                     if entry["source"] in selected:
                         marker = read_json(Path(entry["output"]) / "enrichment.status.json")
-                        if marker.get("status") == "failed":
+                        # On-demand mode ignores failures of retired automatic runs.
+                        if marker.get("status") == "failed" and (
+                            smart_is_automatic(config) or marker.get("requested")
+                        ):
                             code, error = (
                                 1,
                                 "原稿已完成，文稿分析失败。请打开录音，仅重试文稿阶段。",
@@ -299,6 +307,7 @@ class Workbench:
                 "model": self.config.whisper["model"],
                 "language": self.config.whisper["language"],
                 "analysis_enabled": self.config.analysis.get("enabled", False),
+                "analysis_automatic": smart_is_automatic(self.config),
                 "speakers_enabled": self.config.speakers.get("enabled", False),
                 "voice_memos_enabled": self.config.voice_memos.get("enabled", False),
                 "notifications_enabled": self.config.notifications.get("enabled", False),
@@ -362,6 +371,12 @@ class Workbench:
             if not self.config.analysis.get("enabled"):
                 raise ValueError("尚未启用文本模型，请在 config.toml 中开启 analysis.enabled")
             return self.store.enqueue("title", {"job_id": entry["id"]}, "重新生成录音名称")
+        if action == "polish":
+            if entry["status"] != "completed":
+                raise ValueError("请先完成音频转写")
+            if not self.config.analysis.get("enabled"):
+                raise ValueError("尚未启用文本模型，请在 config.toml 中开启 analysis.enabled")
+            return self.store.enqueue("polish", {"job_id": entry["id"]}, "润色正文")
         if action == "diarize":
             if entry["status"] != "completed":
                 raise ValueError("请先完成音频转写")

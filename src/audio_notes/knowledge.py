@@ -178,6 +178,20 @@ class Knowledge:
                     s["revised"] = True
         return segments
 
+    def absorb_edits(self, revision, edits):
+        """Edits folded into a newly polished body no longer apply and cannot be undone."""
+        remaining = [edit for edit in revision["edits"] if edit not in edits]
+        self.put(
+            "revisions",
+            revision["id"],
+            {
+                **revision,
+                "edits": remaining,
+                "absorbed": [*revision.get("absorbed", []), *edits],
+                "active": bool(remaining),
+            },
+        )
+
     def undo(self, key, revision):
         item = self.get("revisions", revision)
         if item.get("recording") != key:
@@ -306,6 +320,8 @@ def revised_paragraph(paragraph, units, segments):
 
 
 def decorate(config, item):
+    from .enrichment import polish_failed
+
     k = Knowledge(config.state)
     key = item["id"]
     item["segments"] = k.overlay(key, item["segments"])
@@ -431,6 +447,8 @@ def decorate(config, item):
         "sources": refs(analysis.get("brief", {}).get("source_ids", [])),
         "actions": actions,
         "body": body,
+        "body_source": result.get("body", "model") if result else None,
+        "body_retry": any(polish_failed(chunk) for chunk in result.get("polished", [])),
         "themes": analysis.get("themes", []),
         "detected_scene": analysis.get("scene", "auto"),
         "scene": k.scene(key, Path(item["output"])),
