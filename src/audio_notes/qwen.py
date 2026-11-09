@@ -29,6 +29,19 @@ def speech_regions(audio, enabled):
     return regions
 
 
+def _letters(text):
+    return "".join(c for c in text if c.isalnum()).casefold()
+
+
+def echoes_prompt(text, prompt, aligned):
+    """On near-silent audio Qwen may recite the context prompt instead of speech."""
+    spoken, context = _letters(text), _letters(prompt or "")
+    if not spoken or not context:
+        return False
+    # A full recital is never speech; a fragment is dropped only if nothing aligned to it.
+    return spoken == context or (not aligned and spoken in context)
+
+
 def transcribe_local(source, directory, settings, on_progress=None):
     import mlx.core as mx
     from faster_whisper.audio import decode_audio
@@ -87,6 +100,9 @@ def transcribe_local(source, directory, settings, on_progress=None):
                     start = min(chunk_end, max(chunk_start, offset + word["start"]))
                     end = min(chunk_end, max(start, offset + word["end"]))
                     words.append({"word": word["text"], "start": start, "end": end})
+            if echoes_prompt(text, settings["initial_prompt"], words):
+                print(f"跳过复述提示词的片段：{chunk_start:.1f} 秒 {text!r}", flush=True)
+                continue
             if settings["word_timestamps"] and not words and any(c.isalnum() for c in text):
                 raise RuntimeError("时间戳对齐未返回有效词边界，未保存不完整的转写结果")
             # Keep the recognizer's complete text, including punctuation.

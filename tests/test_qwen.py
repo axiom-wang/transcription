@@ -119,3 +119,35 @@ def test_worker_dispatches_qwen_and_keeps_engine_manifest(config, monkeypatch):
     raw = json.loads(raw_path.read_text())
     assert raw["text"] == "你好！"
     assert raw["engine"]["model_manifest"]["model"] == QWEN_MODEL
+
+
+def test_prompt_recital_on_silence_is_dropped(config, monkeypatch):
+    import faster_whisper.audio
+    import mlx_qwen3_asr
+
+    config = replace(config, whisper={**config.whisper, "initial_prompt": "王炎（常见误写：王岩、王言）"})
+    monkeypatch.setattr(faster_whisper.audio, "decode_audio", lambda *a, **k: np.zeros(160000))
+    monkeypatch.setattr(
+        "audio_notes.qwen.speech_regions",
+        lambda *a: [{"start": 0, "end": 7360}, {"start": 16000, "end": 48000}],
+    )
+    recital = SimpleNamespace(
+        text="王炎（常见误写：王岩、王言）。",
+        language="Chinese",
+        truncated=False,
+        chunks=[{"start": 0.0, "end": 0.46, "text": "王炎（常见误写：王岩、王言）。"}],
+        # The aligner places the hallucinated words past the end of the tiny region.
+        segments=[{"text": "王", "start": 0.56, "end": 0.7}],
+    )
+    speech = SimpleNamespace(
+        text="王炎你好。",
+        language="Chinese",
+        truncated=False,
+        chunks=[{"start": 0.0, "end": 2.0, "text": "王炎你好。"}],
+        segments=[{"text": "王炎", "start": 0.1, "end": 0.6}, {"text": "你好", "start": 0.7, "end": 1.2}],
+    )
+    results = iter([recital, speech])
+    monkeypatch.setattr(mlx_qwen3_asr, "transcribe", lambda *a, **k: next(results))
+    saved, _, _, _ = transcribe_local("test.wav", config.model_dir, config.whisper)
+    assert [s["text"] for s in saved] == ["王炎你好。"]
+    assert saved[0]["id"] == 0 and saved[0]["start"] == 1.1

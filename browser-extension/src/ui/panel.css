@@ -340,6 +340,8 @@ body {
   text-align: center;
 }
 
+.foot-warn { margin: 6px 0 0; color: var(--amber); }
+
 kbd {
   padding: 1px 5px;
   border: 1px solid var(--border);

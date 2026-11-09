@@ -12,15 +12,13 @@
  * 字节数由 offscreen 以 2 秒心跳更新，够用了。
  */
 
-import { T, stateLabel, shortcutLabel } from './strings.js';
+import { T, stateLabel, shortcutsFrom } from './strings.js';
 import { UI, sendTo } from '../common/protocol.js';
 import { formatBytes, formatDuration, createLogger } from '../common/log.js';
 import { S } from '../common/states.js';
 import { NO_SOUND_WARN_MS, SILENT_INDICATOR_MS } from '../common/audio-level.js';
 
 const log = createLogger('panel');
-
-const SHORTCUT = shortcutLabel();
 
 /** 候选列表刷新的防抖间隔。audible 有约 2 秒防抖且会抖动，跟太紧只会让列表乱跳。 */
 const REFRESH_DEBOUNCE_MS = 2500;
@@ -49,6 +47,9 @@ const el = {
   monitorLabel: /** @type {HTMLElement} */ (document.getElementById('monitorLabel')),
   monitorHint: /** @type {HTMLElement} */ (document.getElementById('monitorHint')),
   shortcutHint: /** @type {HTMLElement} */ (document.getElementById('shortcutHint')),
+  shortcutWarn: /** @type {HTMLElement} */ (document.getElementById('shortcutWarn')),
+  shortcutWarnText: /** @type {HTMLElement} */ (document.getElementById('shortcutWarnText')),
+  setShortcuts: /** @type {HTMLButtonElement} */ (document.getElementById('setShortcuts')),
 };
 
 /** @type {any[]} */
@@ -57,6 +58,8 @@ let rows = [];
 let recoverable = [];
 /** 全局回放偏好。初始值由 GET_PREFS 填入，之后由开关驱动。 */
 let monitorAll = false;
+/** 实际生效的快捷键，空串表示未绑定。由 refresh() 从 chrome.commands 读取。 */
+let shortcuts = { arm: '', toggle: '' };
 /** 正在进行的操作（tabId 或 'all'），用于禁用按钮防重复点击 */
 /** @type {Set<string>} */
 const busy = new Set();
@@ -73,9 +76,25 @@ function initStaticText() {
   el.monitorLabel.textContent = T.monitorGlobalLabel;
   /** @type {HTMLElement} */ (el.empty.querySelector('.empty-title')).textContent = T.emptyTitle;
   /** @type {HTMLElement} */ (el.empty.querySelector('.empty-hint')).textContent = T.emptyHint;
-  el.shortcutHint.innerHTML =
-    `授权当前标签页：<kbd>${SHORTCUT}</kbd> · 开始/停止全部：<kbd>${
-      SHORTCUT.replace(/R$/, 'S')}</kbd>`;
+  el.shortcutWarnText.textContent = T.shortcutUnbound;
+  el.setShortcuts.textContent = T.actionSetShortcuts;
+}
+
+/** 底栏只展示真实生效的快捷键；有未绑定的就给出设置入口。 */
+function renderShortcutHint() {
+  /** @param {string} key */
+  const kbd = (key) => {
+    const node = document.createElement('kbd');
+    node.textContent = key;
+    return node;
+  };
+  const { arm, toggle } = shortcuts;
+  el.shortcutHint.replaceChildren(
+    T.footArm,
+    ...(arm ? [' 或 ', kbd(arm)] : []),
+    ...(toggle ? [T.footToggle, kbd(toggle)] : []),
+  );
+  el.shortcutWarn.hidden = Boolean(arm && toggle);
 }
 
 /** 渲染全局回放开关的状态与提示语。 */
@@ -132,6 +151,7 @@ function render() {
   renderRecoverBanner();
   renderExplainer();
   renderMonitorBar();
+  renderShortcutHint();
 
   const recording = rows.filter((r) => isActiveState(r.state));
   const armed = rows.filter((r) => r.state === S.ARMED);
@@ -271,7 +291,7 @@ function buildMeta(row) {
   }
 
   if (row.state === S.IDLE) {
-    frag.appendChild(document.createTextNode(T.hintArmThisTab(SHORTCUT)));
+    frag.appendChild(document.createTextNode(T.hintArmThisTab(shortcuts.arm)));
     return frag;
   }
 
@@ -500,7 +520,7 @@ async function disarm(tabId) {
 async function activateTab(tabId) {
   await sendTo('sw', UI.ACTIVATE_TAB, { tabId });
   // 刻意**不**关闭侧边栏 —— 这正是侧边栏相对 popup 的关键优势：
-  // 用户切到那个标签页按快捷键时，面板还在，快捷键提示就在眼前。
+  // 用户切到那个标签页授权时，面板还在，操作提示就在眼前。
 }
 
 /** @param {number} tabId @param {boolean} enabled */
@@ -564,6 +584,8 @@ async function refresh() {
       const prev = Number(localStorage.getItem('armCount') ?? '0');
       if (armedEver > prev) localStorage.setItem('armCount', String(armedEver));
     }
+    // 用户可能刚在 chrome://extensions/shortcuts 改过，所以每次刷新都重读
+    shortcuts = shortcutsFrom(await chrome.commands.getAll());
     render();
   } catch (err) {
     log.warn('刷新失败', err);
@@ -589,6 +611,11 @@ el.autoTingji.addEventListener('change', () => {
     .finally(() => { el.autoTingji.disabled = false; });
 });
 el.openTingji.addEventListener('click', () => void openTingji());
+el.setShortcuts.addEventListener('click', () => {
+  void chrome.tabs.create({ url: 'chrome://extensions/shortcuts' });
+});
+// 从快捷键设置页回到面板时立刻反映新绑定（改绑定不会触发任何其他刷新来源）
+window.addEventListener('focus', () => void refresh());
 
 el.startAll.addEventListener('click', () => void startAll());
 el.stopAll.addEventListener('click', () => void stopAll());

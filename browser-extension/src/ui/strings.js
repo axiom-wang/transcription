@@ -20,13 +20,13 @@ export const T = {
 
   // ── 空状态 ──
   emptyTitle: '还没有可录制的标签页',
-  emptyHint: '播放一些音频，或切到目标标签页按快捷键授权。',
+  emptyHint: '播放一些音频，或切到目标标签页点击扩展图标授权。',
 
   // ── 说明条 ──
   explainerTitle: '为什么需要逐个授权？',
   explainerBody:
     'Chrome 要求扩展必须在某个标签页上被触发过，才允许录制该标签页。' +
-    '切到目标标签页，按下快捷键（或点击扩展图标 / 用右键菜单）即可授权。' +
+    '切到目标标签页，点击扩展图标（或按快捷键 / 用右键菜单）即可授权。' +
     '已授权的标签页，扩展图标上会显示 ● 徽标。',
   explainerDismiss: '知道了，不再提示',
 
@@ -72,8 +72,17 @@ export const T = {
   audioNoSound: '未检测到声音 —— 确认标签页正在播放？',
 
   // ── 提示 ──
-  hintArmThisTab: (/** @type {string} */ key) => `切到该标签页按 ${key} 授权`,
+  hintArmThisTab: (/** @type {string} */ key) =>
+    (key ? `切到该标签页，点击扩展图标或按 ${key} 授权` : '切到该标签页，点击扩展图标授权'),
   hintNotCapturable: '该页面无法录制',
+  footArm: '授权当前标签页：点击扩展图标',
+  footToggle: ' · 开始/停止全部：',
+  /**
+   * manifest 里的 suggested_key 只是建议：被占用时 Chrome 不分配，也不报错。
+   * 不说明的话，用户只会看到「按了没反应」。
+   */
+  shortcutUnbound: '快捷键未生效（未设置或被占用）',
+  actionSetShortcuts: '设置快捷键',
   monitorTitle: '控制录制时你是否还能听到这个标签页的声音（不影响录音文件）',
   // ── 恢复 ──
   recoverTitle: (/** @type {number} */ n) => `发现 ${n} 段未保存的录音`,
@@ -96,10 +105,15 @@ export const T = {
   errPrefix: '错误：',
 };
 
-/** 快捷键的显示文本。macOS 用符号，其他平台用单词。 */
-export function shortcutLabel() {
-  const isMac = navigator.userAgent.includes('Mac');
-  return isMac ? '⌥⇧R' : 'Alt+Shift+R';
+/**
+ * 从 chrome.commands.getAll() 的结果取出实际生效的快捷键，空串表示未绑定。
+ * 显示文本由 Chrome 按平台生成（macOS 为符号）。
+ * @param {Array<{name?:string, shortcut?:string}>} commands
+ * @returns {{arm:string, toggle:string}}
+ */
+export function shortcutsFrom(commands) {
+  const of = (/** @type {string} */ name) => commands.find((c) => c.name === name)?.shortcut ?? '';
+  return { arm: of('arm-current-tab'), toggle: of('toggle-record-all') };
 }
 
 /**

@@ -135,6 +135,8 @@ def load_config(path: Path) -> Config:
             "~/Library/Application Support/com.apple.voicememos/Recordings",
             "~/Library/Containers/com.apple.VoiceMemos/Data/Library/Application Support/Recordings",
         ],
+        "delete_original_after_transcription": False,
+        "delete_shortcut": "听记删除语音备忘录",
     }
     for name, target in (
         ("whisper", whisper),
@@ -207,6 +209,10 @@ def load_config(path: Path) -> Config:
     processing["extensions"] = [x.lower().lstrip(".") for x in processing["extensions"]]
     if type(voice_memos["enabled"]) is not bool:
         raise ValueError("voice_memos.enabled 必须是 true 或 false")
+    if type(voice_memos["delete_original_after_transcription"]) is not bool:
+        raise ValueError("voice_memos.delete_original_after_transcription 必须是 true 或 false")
+    if not isinstance(voice_memos["delete_shortcut"], str):
+        raise ValueError("voice_memos.delete_shortcut 必须是快捷指令名称")
     if type(analysis["enabled"]) is not bool:
         raise ValueError("analysis.enabled 必须是 true 或 false")
     if type(analysis["automatic"]) is not bool:

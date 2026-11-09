@@ -13,6 +13,10 @@ directories = [
   "~/Library/Application Support/com.apple.voicememos/Recordings",
   "~/Library/Containers/com.apple.VoiceMemos/Data/Library/Application Support/Recordings",
 ]
+# 本地副本校验、完整解码且转写成功后，通过快捷指令删除语音备忘录中的原录音（进入「最近删除」）。
+# 需先按 README 创建同名快捷指令；未创建时原录音保留。
+delete_original_after_transcription = true
+delete_shortcut = "听记删除语音备忘录"
 
 [whisper]
 # 保留 whisper 配置段名称以兼容旧入口；默认引擎为 MLX Qwen3-ASR。

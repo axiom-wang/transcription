@@ -458,7 +458,7 @@ function classifyError(err) {
   }
   // 授权不在了
   if (/not been invoked|activeTab|Chrome pages cannot be captured/i.test(raw)) {
-    return { code: E.GRANT_LOST, message: '授权已失效，请切到该标签页重新按快捷键授权' };
+    return { code: E.GRANT_LOST, message: '授权已失效，请切到该标签页点击扩展图标重新授权' };
   }
   if (/超时/.test(raw)) {
     return { code: E.STREAM_EXPIRED, message: '启动超时（授权令牌已过期），请重试' };
@@ -478,7 +478,7 @@ function classifyError(err) {
  */
 function chineseFor(code, fallback) {
   switch (code) {
-    case E.GRANT_LOST: return '授权已失效，请切到该标签页重新按快捷键授权';
+    case E.GRANT_LOST: return '授权已失效，请切到该标签页点击扩展图标重新授权';
     case E.TAB_BUSY: return '该标签页已被占用（可能有其他录制程序）';
     case E.STREAM_EXPIRED: return '启动超时（授权令牌已过期），请重试';
     case E.TAB_GONE: return '标签页已关闭';
