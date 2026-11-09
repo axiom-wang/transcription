@@ -13,7 +13,6 @@ from pathlib import Path
 from .config import load_config
 from .files import AlreadyRunning, atomic_json, run_lock
 from .model import check_model, download
-from .original_cleanup import OriginalCleaner
 from .pipeline import Pipeline, set_lock_fd
 from .voice_memos import VoiceMemosImporter, inspect_sources
 
@@ -342,7 +341,6 @@ def main(argv=None):
                     return 1 if imported.failed else (3 if imported.waiting else 0)
                 check_model(config.model_dir)
                 pipeline = Pipeline(config, config.profile())
-                cleaner = OriginalCleaner(config, importer.db, pipeline.store, pipeline.profile)
                 previous = signal.getsignal(signal.SIGTERM)
 
                 def interrupted(signum, frame):
@@ -364,7 +362,6 @@ def main(argv=None):
                             # A manual round finishes follow-up stages for every new recording;
                             # the optional watch loop keeps the per-pass limits.
                             counts = pipeline.scan(watch=watching, followup_limit=watching)
-                            cleaned = cleaner.run()
                             failed = failed or bool(counts.failed or imported.failed)
                             waiting = counts.waiting + imported.waiting
                             summary["copied"] += imported.copied
@@ -372,8 +369,6 @@ def main(argv=None):
                             summary.update(
                                 found=imported.found,
                                 failed=counts.failed + imported.failed,
-                                originals_deleted=summary.get("originals_deleted", 0)
-                                + cleaned.deleted,
                                 waiting=waiting,
                                 finished_at=time.time(),
                             )
@@ -389,7 +384,6 @@ def main(argv=None):
                     while True:
                         importer.scan()
                         pipeline.scan(watch=True)
-                        cleaner.run()
                         time.sleep(config.processing["poll_seconds"])
                 finally:
                     signal.signal(signal.SIGTERM, previous)

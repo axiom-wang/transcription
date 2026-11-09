@@ -229,8 +229,6 @@ def test_manual_run_waits_only_up_to_limit_and_records_summary(imported_config, 
     calls = []
 
     class Importer:
-        db = None
-
         def __init__(self, config):
             pass
 
@@ -241,8 +239,6 @@ def test_manual_run_waits_only_up_to_limit_and_records_summary(imported_config, 
             pass
 
     class FakePipeline:
-        store = profile = None
-
         def __init__(self, config, profile):
             pass
 
@@ -256,17 +252,6 @@ def test_manual_run_waits_only_up_to_limit_and_records_summary(imported_config, 
     monkeypatch.setattr(cli, "load_config", lambda path: imported_config)
     monkeypatch.setattr(cli, "VoiceMemosImporter", Importer)
     monkeypatch.setattr(cli, "Pipeline", FakePipeline)
-
-    class Cleaner:
-        def __init__(self, *args):
-            pass
-
-        def run(self):
-            from audio_notes.original_cleanup import CleanupCounts
-
-            return CleanupCounts()
-
-    monkeypatch.setattr(cli, "OriginalCleaner", Cleaner)
     monkeypatch.setattr(cli, "check_model", lambda path: None)
     monkeypatch.setattr(type(imported_config), "profile", lambda self: "test-profile")
     monkeypatch.setattr(cli.time, "sleep", lambda seconds: None)
